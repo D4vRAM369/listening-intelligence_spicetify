@@ -27,7 +27,7 @@ const parentOf = (n, target) => (n.children.includes(target) ? n : n.children.ma
 const findButton = (n, text) => (n.tag === "button" && n.textContent === text ? n : n.children.map((c) => findButton(c, text)).find(Boolean));
 
 // Arranca la extensión en un "Spotify" falso. disk = el localStorage que sobrevive entre arranques.
-function boot(disk, clock, initialState = null) {
+async function boot(disk, clock, initialState = null) {
   const L = {}; // listeners registrados por la extensión
   class FakeDate extends Date {
     constructor(...a) { super(...(a.length ? a : [clock.t])); }
@@ -45,6 +45,7 @@ function boot(disk, clock, initialState = null) {
   const document = { createElement: fakeEl };
   const ctx = { Spicetify, window: win, document, console: { log() {}, warn() {}, error() {} }, setTimeout, Date: FakeDate };
   vm.runInNewContext(SRC, ctx);
+  await new Promise((r) => setImmediate(r)); // main() es asíncrona (D-023): espera a que termine de cargar
   const emit = (st) => { L.songchange?.({ data: st }); L.onplaypause?.({ data: st }); }; // llegan gemelos (D-012)
   return { L, emit, LI: win.ListeningIntelligence, disk };
 }
@@ -55,10 +56,10 @@ const st = (uri, isPaused = false) => ({
 });
 const saved = (disk) => JSON.parse(disk["listening-intelligence:v1:store"]);
 
-test("captura, persiste y recupera tras cierre brusco (RF-01…RF-05, CA-03)", () => {
+test("captura, persiste y recupera tras cierre brusco (RF-01…RF-05, CA-03)", async () => {
   const disk = {};
   const clock = { t: 1_000_000 };
-  let s = boot(disk, clock);
+  let s = await boot(disk, clock);
   assert.equal(s.LI.status, "registrando");
 
   s.emit(st("spotify:track:A")); // empieza A
@@ -81,7 +82,7 @@ test("captura, persiste y recupera tras cierre brusco (RF-01…RF-05, CA-03)", (
 
   // Nuevo arranque con el mismo "disco": B se recupera hasta su último checkpoint (20 s).
   clock.t += 3600 * S;
-  s = boot(disk, clock);
+  s = await boot(disk, clock);
   data = saved(disk);
   assert.equal(s.LI.store.records.length, 2);
   assert.equal(s.LI.store.records[1].uri, "spotify:track:B");
@@ -89,19 +90,19 @@ test("captura, persiste y recupera tras cierre brusco (RF-01…RF-05, CA-03)", (
   assert.equal(s.LI.store.open, null);
 });
 
-test("datos corruptos: copia de seguridad intacta y arranque limpio (RF-12, CA-04)", () => {
+test("datos corruptos: copia de seguridad intacta y arranque limpio (RF-12, CA-04)", async () => {
   const disk = { "listening-intelligence:v1:store": "{esto no es JSON" };
   const clock = { t: 5_000 };
-  const s = boot(disk, clock);
+  const s = await boot(disk, clock);
   assert.equal(s.LI.status, "registrando");
   assert.equal(disk["listening-intelligence:backup:5000"], "{esto no es JSON"); // original conservado
   assert.equal(s.LI.store.records.length, 0);
 });
 
-test("solo usa claves con su prefijo (RNF-04, CA-06)", () => {
+test("solo usa claves con su prefijo (RNF-04, CA-06)", async () => {
   const disk = { "otra-extension:datos": "intocable" };
   const clock = { t: 0 };
-  const s = boot(disk, clock);
+  const s = await boot(disk, clock);
   s.emit(st("spotify:track:A"));
   clock.t += 40 * S;
   s.emit(st("spotify:track:B"));
@@ -109,13 +110,13 @@ test("solo usa claves con su prefijo (RNF-04, CA-06)", () => {
   for (const k of Object.keys(disk)) assert.ok(k === "otra-extension:datos" || k.startsWith("listening-intelligence:"));
 });
 
-test("panel: abre con un registro corrupto y cambia de rango (RF-06, RF-13, CA-04)", () => {
+test("panel: abre con un registro corrupto y cambia de rango (RF-06, RF-13, CA-04)", async () => {
   const clock = { t: Date.UTC(2026, 10, 14, 12) };
   const t0 = clock.t - 3 * 86400 * S; // hace 3 días: fuera de «Hoy», dentro de «7 días»
   const good = { id: "x", uri: "spotify:track:A", kind: "track", title: "Canción A", artists: [{ uri: "spotify:artist:x", name: "Artista X" }],
     albumUri: null, contextUri: null, shuffle: "off", durationMs: 200 * S, startedAt: t0, playedMs: 120 * S, pauses: 0, endedAt: t0 + 120 * S };
   const disk = { "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: t0, open: null, records: [good, { basura: true }] }) };
-  const s = boot(disk, clock);
+  const s = await boot(disk, clock);
 
   s.L.topbarClick(); // clic en el icono
   const root = s.L.modal.content;
@@ -146,10 +147,10 @@ test("panel: abre con un registro corrupto y cambia de rango (RF-06, RF-13, CA-0
   assert.match(text, /\b2\b.*minutos escuchados/); // 120 s = 2 min
 });
 
-test("Borrar: pide confirmación, borra SOLO lo nuestro y el panel sigue abierto (RF-11, CA-06)", () => {
+test("Borrar: pide confirmación, borra SOLO lo nuestro y el panel sigue abierto (RF-11, CA-06)", async () => {
   const clock = { t: Date.UTC(2026, 10, 14, 12) };
   const disk = { "otra-extension:datos": "intocable", "listening-intelligence:backup:1": "viejo" };
-  const s = boot(disk, clock);
+  const s = await boot(disk, clock);
   s.emit(st("spotify:track:A"));
   clock.t += 40 * S;
   s.emit(st("spotify:track:B")); // A guardada
@@ -169,7 +170,7 @@ test("Borrar: pide confirmación, borra SOLO lo nuestro y el panel sigue abierto
   assert.match(textOf(root), /0 registros/);
 });
 
-test("Limpieza: pestaña sin cerrar el modal, ▶ reproduce y Resumen recupera los chips (A1)", () => {
+test("Limpieza: pestaña sin cerrar el modal, ▶ reproduce y Resumen recupera los chips (A1)", async () => {
   const clock = { t: Date.UTC(2026, 10, 14, 12) };
   const skip = (i) => {
     const t = clock.t - (i + 1) * 86400 * S;
@@ -177,7 +178,7 @@ test("Limpieza: pestaña sin cerrar el modal, ▶ reproduce y Resumen recupera l
       albumUri: null, contextUri: "spotify:playlist:p1", shuffle: "off", durationMs: 200 * S, startedAt: t, playedMs: 5 * S, pauses: 0, endedAt: t + 5 * S };
   };
   const disk = { "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: 0, open: null, records: Array.from({ length: 10 }, (_, i) => skip(i)) }) };
-  const s = boot(disk, clock); // Platform sin PlaylistAPI: los nombres de playlist usan el respaldo
+  const s = await boot(disk, clock); // Platform sin PlaylistAPI: los nombres de playlist usan el respaldo
 
   s.L.topbarClick();
   const root = s.L.modal.content;
@@ -199,7 +200,7 @@ test("Limpieza: pestaña sin cerrar el modal, ▶ reproduce y Resumen recupera l
   assert.match(textOf(root), /minutos escuchados/);
 });
 
-test("Cómo escuchas con ≥ 20 escuchas: pinta el análisis y la tarjeta del aleatorio no apila «x % / y %» (C)", () => {
+test("Cómo escuchas con ≥ 20 escuchas: pinta el análisis y la tarjeta del aleatorio no apila «x % / y %» (C)", async () => {
   const clock = { t: Date.UTC(2026, 10, 14, 12) };
   const rec = (i) => {
     const t = clock.t - (i + 1) * 600 * S; // cada 10 min hacia atrás, todo hoy
@@ -209,7 +210,7 @@ test("Cómo escuchas con ≥ 20 escuchas: pinta el análisis y la tarjeta del al
       startedAt: t, playedMs: played * S, pauses: 0, endedAt: t + played * S };
   };
   const disk = { "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: 0, open: null, records: Array.from({ length: 20 }, (_, i) => rec(i)) }) };
-  const s = boot(disk, clock);
+  const s = await boot(disk, clock);
   s.L.topbarClick();
   const root = s.L.modal.content;
   assert.ok(click(root, findButton(root, "Cómo escuchas")));
@@ -220,7 +221,7 @@ test("Cómo escuchas con ≥ 20 escuchas: pinta el análisis y la tarjeta del al
   assert.ok(click(root, findButton(root, "7 días")), "cambiar de rango en esta pestaña no cierra el modal");
 });
 
-test("Tendencias: flechas frente a ayer a esta hora en Resumen y Cómo escuchas", () => {
+test("Tendencias: flechas frente a ayer a esta hora en Resumen y Cómo escuchas", async () => {
   const clock = { t: Date.UTC(2026, 10, 14, 12) };
   // 20 ayer (todas válidas) y 20 hoy (la mitad saltadas), cada 10 min hacia atrás desde la misma hora
   const rec = (i, dayOffset, played) => {
@@ -231,7 +232,7 @@ test("Tendencias: flechas frente a ayer a esta hora en Resumen y Cómo escuchas"
   };
   const records = [...Array.from({ length: 20 }, (_, i) => rec(i, 1, 120)), ...Array.from({ length: 20 }, (_, i) => rec(i, 0, i % 2 ? 5 : 120))];
   const disk = { "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: 0, open: null, records }) };
-  const s = boot(disk, clock);
+  const s = await boot(disk, clock);
   s.L.topbarClick();
   const root = s.L.modal.content;
   let text = textOf(root);
@@ -243,25 +244,25 @@ test("Tendencias: flechas frente a ayer a esta hora en Resumen y Cómo escuchas"
   assert.match(text, /▼ \d+ pts/); // atención baja (la mitad saltadas)
 });
 
-test("Tendencias: sin periodo anterior completo → leyenda «Sin tendencias» y ninguna flecha", () => {
+test("Tendencias: sin periodo anterior completo → leyenda «Sin tendencias» y ninguna flecha", async () => {
   const clock = { t: Date.UTC(2026, 10, 14, 12) };
   const r = { id: "x", uri: "spotify:track:X", kind: "track", title: "X", artists: [{ uri: null, name: "A" }], albumUri: null, contextUri: null,
     shuffle: "off", durationMs: 200 * S, startedAt: clock.t - 600 * S, playedMs: 120 * S, pauses: 0, endedAt: clock.t - 480 * S };
   const disk = { "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: clock.t - 3600 * S, open: null, records: [r] }) };
-  const s = boot(disk, clock);
+  const s = await boot(disk, clock);
   s.L.topbarClick();
   const text = textOf(s.L.modal.content);
   assert.match(text, /Sin tendencias: aún no hay un periodo anterior completo/);
   assert.doesNotMatch(text, /[▲▼]/);
 });
 
-test("Tendencias: sin sesiones hoy, la media por sesión no lleva flecha (revisión final, I1)", () => {
+test("Tendencias: sin sesiones hoy, la media por sesión no lleva flecha (revisión final, I1)", async () => {
   const clock = { t: new Date(2026, 10, 14, 8).getTime() }; // hoy 08:00, aún sin música
   const t = clock.t - 86_400_000 - 3600 * S; // ayer 07:00
   const r = { id: "y", uri: "spotify:track:Y", kind: "track", title: "Y", artists: [{ uri: null, name: "A" }], albumUri: null, contextUri: null,
     shuffle: "off", durationMs: 200 * S, startedAt: t, playedMs: 120 * S, pauses: 0, endedAt: t + 120 * S };
   const disk = { "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: 0, open: null, records: [r] }) };
-  const s = boot(disk, clock);
+  const s = await boot(disk, clock);
   s.L.topbarClick();
   const findCard = (n) => (n.children.some((c) => c.textContent.startsWith("de media")) ? n : n.children.map(findCard).find(Boolean));
   const avg = findCard(s.L.modal.content);
@@ -269,12 +270,12 @@ test("Tendencias: sin sesiones hoy, la media por sesión no lleva flecha (revisi
   assert.doesNotMatch(textOf(avg), /[▲▼]/); // …así que tampoco hay tendencia (antes: «— ▼ 100 %»)
 });
 
-test("Tendencias: periodo anterior sin música → la leyenda lo dice, en vez de «Flechas: …» sin flechas", () => {
+test("Tendencias: periodo anterior sin música → la leyenda lo dice, en vez de «Flechas: …» sin flechas", async () => {
   const clock = { t: Date.UTC(2026, 10, 14, 12) };
   const r = { id: "x", uri: "spotify:track:X", kind: "track", title: "X", artists: [{ uri: null, name: "A" }], albumUri: null, contextUri: null,
     shuffle: "off", durationMs: 200 * S, startedAt: clock.t - 600 * S, playedMs: 120 * S, pauses: 0, endedAt: clock.t - 480 * S };
   const disk = { "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: 0, open: null, records: [r] }) };
-  const s = boot(disk, clock);
+  const s = await boot(disk, clock);
   s.L.topbarClick();
   const text = textOf(s.L.modal.content);
   assert.match(text, /Sin tendencias: en el periodo anterior no sonó música/);

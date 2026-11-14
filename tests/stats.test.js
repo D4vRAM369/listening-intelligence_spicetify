@@ -77,3 +77,11 @@ test("top limitado a 5", () => {
   assert.equal(s.topArtists.length, 5);
   assert.equal(s.topTracks.length, 5);
 });
+
+// Recuerdos (D-024): intervalo [from, to) explícito, cortado por los dos lados.
+test("aggregateBetween corta por ambos lados", () => {
+  const rs = [1, 2, 3].map((day) => rec(`spotify:track:${day}`, [X], at({ day }, 10), 120, 200));
+  const out = core.aggregateBetween(rs, at({ day: 2 }, 0), at({ day: 3 }, 0));
+  assert.equal(out.valid, 1);
+  assert.equal(out.topTracks[0].uri, "spotify:track:2");
+});
