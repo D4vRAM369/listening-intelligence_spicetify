@@ -60,3 +60,10 @@ test("pendingPayload: guarda la pista abierta y lo no confirmado", () => {
   const p = JSON.parse(core.pendingPayload({ open }, [rec(5)]));
   assert.deepEqual(p, { open, unsaved: [rec(5)] });
 });
+
+// Revisión final, I1: confirmar un lote NO puede llevarse un registro que no estaba en él.
+test("dropConfirmed: quita solo lo confirmado, aunque otro lote ya lo hubiera quitado", () => {
+  const [r1, r2, r3] = [rec(1), rec(2), rec(3)];
+  assert.deepEqual(core.dropConfirmed([r2, r3], [r1, r2]).map((r) => r.id), [r3.id]); // r1 ya no estaba: r3 se queda
+  assert.deepEqual(core.dropConfirmed([], [r1]), []);
+});

@@ -27,7 +27,7 @@ const parentOf = (n, target) => (n.children.includes(target) ? n : n.children.ma
 const findButton = (n, text) => (n.tag === "button" && n.textContent === text ? n : n.children.map((c) => findButton(c, text)).find(Boolean));
 
 // Arranca la extensión en un "Spotify" falso. disk = el localStorage que sobrevive entre arranques.
-async function boot(disk, clock, initialState = null) {
+async function boot(disk, clock, initialState = null, opts = {}) {
   const L = {}; // listeners registrados por la extensión
   class FakeDate extends Date {
     constructor(...a) { super(...(a.length ? a : [clock.t])); }
@@ -36,16 +36,17 @@ async function boot(disk, clock, initialState = null) {
   const win = { addEventListener: (t, cb) => (L["window:" + t] = cb), localStorage: disk };
   const Spicetify = {
     Platform: {},
-    showNotification: () => {},
-    LocalStorage: { get: (k) => (k in disk ? disk[k] : null), set: (k, v) => (disk[k] = String(v)), remove: (k) => delete disk[k] },
+    showNotification: (msg, isError) => (L.notes ??= []).push({ msg, isError: !!isError }),
+    LocalStorage: { get: (k) => (k in disk ? disk[k] : null), set: (k, v) => { if (opts.lsThrow?.(k)) throw new Error("QuotaExceededError"); disk[k] = String(v); }, remove: (k) => delete disk[k] },
     Player: { data: initialState, isPlaying: () => true, addEventListener: (t, cb) => (L[t] = cb), playUri: (u) => (L.played = u) },
     Topbar: { Button: class { constructor(label, icon, onClick) { L.topbarClick = onClick; } } },
     PopupModal: { display: (o) => (L.modal = o) },
   };
   const document = { createElement: fakeEl };
-  const ctx = { Spicetify, window: win, document, console: { log() {}, warn() {}, error() {} }, setTimeout, Date: FakeDate };
+  const ctx = { Spicetify, window: win, document, console: { log() {}, warn() {}, error() {} }, setTimeout, Date: FakeDate, navigator: {} };
+  if (opts.idb) ctx.indexedDB = opts.idb;
   vm.runInNewContext(SRC, ctx);
-  await new Promise((r) => setImmediate(r)); // main() es asíncrona (D-023): espera a que termine de cargar
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0)); // main() es asíncrona (D-023): espera a que termine de cargar
   const emit = (st) => { L.songchange?.({ data: st }); L.onplaypause?.({ data: st }); }; // llegan gemelos (D-012)
   return { L, emit, LI: win.ListeningIntelligence, disk };
 }
@@ -54,6 +55,56 @@ const st = (uri, isPaused = false) => ({
   item: { uri, name: uri.slice(-1), artists: [{ uri: "spotify:artist:x", name: "X" }], album: { uri: "spotify:album:1" } },
   duration: 200 * S, isPaused, shuffle: false, smartShuffle: false, context: { uri: "spotify:playlist:p" },
 });
+// IndexedDB falsa mínima (Node no tiene). `state` sobrevive entre arranques, como el disco.
+// knobs: failGetAll / abortGetAll (la lectura falla o aborta), failClear (Borrar falla).
+function fakeIDB(state, knobs = {}) {
+  return {
+    open() {
+      const req = {};
+      setTimeout(() => {
+        const db = {
+          createObjectStore: () => ({ createIndex() {} }),
+          transaction() {
+            const tx = {};
+            const ops = [];
+            let fail = null;
+            tx.objectStore = (n) => ({
+              put: (v) => ops.push(() => (n === "records" ? state.records.set(v.id, v) : (state.meta = v))),
+              clear: () => { if (knobs.failClear) fail = "error"; ops.push(() => (n === "records" ? state.records.clear() : (state.meta = undefined))); },
+              get: () => { const r = {}; ops.push(() => (r.result = state.meta)); return r; },
+              index: () => ({ getAll: () => {
+                const r = {};
+                if (knobs.failGetAll) fail = "error";
+                if (knobs.abortGetAll) fail = "abort";
+                ops.push(() => (r.result = [...state.records.values()].sort((a, b) => a.startedAt - b.startedAt)));
+                return r;
+              } }),
+            });
+            setTimeout(() => {
+              if (fail === "abort") return tx.onabort?.();
+              if (fail) { tx.error = new Error("fake"); return tx.onerror?.(); }
+              ops.forEach((f) => f());
+              tx.oncomplete?.();
+            }, 0);
+            return tx;
+          },
+        };
+        req.result = db;
+        if (!state.created) { state.created = true; req.onupgradeneeded?.(); }
+        req.onsuccess();
+      }, 0);
+      return req;
+    },
+  };
+}
+const idbState = () => ({ records: new Map(), meta: undefined });
+const STORE = "listening-intelligence:v1:store";
+const legacy = (n) => {
+  const records = Array.from({ length: n }, (_, i) => ({ id: `L${i}`, uri: `spotify:track:L${i}`, kind: "track", title: `L${i}`, artists: [{ uri: null, name: "X" }],
+    albumUri: null, contextUri: null, shuffle: "off", durationMs: 200 * S, startedAt: 1000 + i * 300 * S, playedMs: 100 * S, pauses: 0, endedAt: 1000 + i * 300 * S + 100 * S }));
+  return JSON.stringify({ schemaVersion: 1, observingSince: 1000, open: null, records });
+};
+
 const saved = (disk) => JSON.parse(disk["listening-intelligence:v1:store"]);
 
 test("captura, persiste y recupera tras cierre brusco (RF-01…RF-05, CA-03)", async () => {
@@ -342,4 +393,53 @@ test("Tal día como hoy: la tarjeta sale en Resumen solo si hay música de esa f
   s = await boot({ "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: t, open: null, records: [{ ...r, startedAt: t - 86400 * S, endedAt: t - 86400 * S + 120 * S }] }) }, clock);
   s.L.topbarClick();
   assert.doesNotMatch(textOf(s.L.modal.content), /Tal día como hoy/);
+});
+
+// ─── Revisión final (D-023): rutas de pérdida de datos con IndexedDB ───
+
+test("migración con localStorage casi lleno: se completa y no se repite (revisión, I2)", async () => {
+  const disk = { [STORE]: legacy(3) };
+  const st = idbState();
+  const s = await boot(disk, { t: 9e12 }, null, { idb: fakeIDB(st), lsThrow: (k) => k.includes(":migrated:") });
+  assert.equal(st.records.size, 3, "los 3 registros están en IndexedDB");
+  assert.ok(!(STORE in disk), "la clave antigua se retira aunque no quepa la copia migrated:");
+  assert.equal(s.LI.status, "registrando");
+  assert.ok(!(s.L.notes ?? []).some((n) => n.isError), `sin aviso falso de error: ${JSON.stringify(s.L.notes)}`);
+});
+
+test("clave antigua ilegible y sin sitio para su copia: NO se borra el único original (revisión, I2 / RF-12)", async () => {
+  const disk = { [STORE]: "{roto" };
+  await boot(disk, { t: 9e12 }, null, { idb: fakeIDB(idbState()), lsThrow: (k) => k.includes(":backup:") });
+  assert.equal(disk[STORE], "{roto");
+});
+
+test("si falla la lectura de IndexedDB no se pisa lo guardado y se avisa (revisión, I3)", async () => {
+  const st = idbState();
+  st.created = true;
+  st.records.set("A", JSON.parse(legacy(1)).records[0]);
+  st.meta = { schemaVersion: 1, observingSince: 1000 };
+  const s = await boot({}, { t: 9e12 }, null, { idb: fakeIDB(st, { failGetAll: true }) });
+  assert.equal(st.meta.observingSince, 1000, "meta intacto");
+  assert.equal(st.records.size, 1, "registros intactos");
+  assert.ok((s.L.notes ?? []).some((n) => n.isError), "aviso visible");
+  assert.equal(s.LI.status, "registrando", "sigue registrando (en modo básico, se unirá al reiniciar)");
+});
+
+test("si la lectura de IndexedDB ABORTA, el arranque no se queda colgado (revisión, minor → importante)", async () => {
+  const st = idbState();
+  st.created = true;
+  const s = await boot({}, { t: 9e12 }, null, { idb: fakeIDB(st, { abortGetAll: true }) });
+  assert.equal(s.LI.status, "registrando");
+});
+
+test("Borrar avisa del error si IndexedDB no se vació (revisión, I4)", async () => {
+  const st = idbState();
+  const s = await boot({ [STORE]: legacy(2) }, { t: 9e12 }, null, { idb: fakeIDB(st, { failClear: true }) });
+  s.L.topbarClick();
+  const root = s.L.modal.content;
+  click(root, findButton(root, "Borrar"));
+  click(root, findButton(root, "¿Seguro? Pulsa otra vez"));
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+  const last = s.L.notes.at(-1);
+  assert.ok(last.isError, `el último aviso es de error: «${last.msg}»`);
 });

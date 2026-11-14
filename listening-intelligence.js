@@ -276,6 +276,13 @@
     return { store, toPut, migrated, dropped };
   }
 
+  // Lote confirmado por IndexedDB → fuera de `unsaved`. Por `id`: si otro lote ya lo había quitado, no se
+  // lleva por delante a nadie más (splice(indexOf = -1) borraba el ÚLTIMO: revisión final, I1).
+  function dropConfirmed(unsaved, batch) {
+    const done = new Set(batch.map((r) => r.id));
+    return unsaved.filter((r) => !done.has(r.id));
+  }
+
   // Texto del espejo síncrono en localStorage: la pista abierta + lo que IndexedDB aún no confirmó.
   function pendingPayload(store, unsaved) {
     return JSON.stringify({ open: store.open, unsaved });
@@ -558,7 +565,13 @@
 
   // Lo que sonaba entre from y to → los bloques de la pestaña. Pura (no lee el reloj).
   // No inventa pasado: lo anterior al día en que empezó la observación no existe (clippedFrom).
-  function memories(records, from, to, observingSince) {
+  // `now` (opcional): el final se limita a hoy; un año mal escrito (9999) no genera millones de barras.
+  function memories(records, from, to, observingSince, now) {
+    if (now != null) {
+      const end = new Date(dayStart(now));
+      end.setDate(end.getDate() + 1);
+      to = Math.min(to, end.getTime());
+    }
     const clippedFrom = Math.max(from, dayStart(observingSince));
     const agg = aggregateBetween(records, clippedFrom, to);
     const inRange = (t) => t >= clippedFrom && t < to;
@@ -613,7 +626,7 @@
     return null;
   }
 
-  const core = { dmyToYmd, ymdToDmy, onThisDay, memories, dayRange, shortcut, slot, shiftMonths, combineSources, pendingPayload, previousWindow, trend, fmtSec, habits, fmtMin, heatmap, sessions, streak, cleanup, serialize, mergeStores, ownKeys, kindOf, shuffleMode, openRecord, flush, closeRecord, applyState, recoverOpen, classify, isValidRecord, parseStore, emptyStore, rangeStart, aggregate, aggregateBetween, SCHEMA_VERSION, STORE_KEY };
+  const core = { dropConfirmed, dmyToYmd, ymdToDmy, onThisDay, memories, dayRange, shortcut, slot, shiftMonths, combineSources, pendingPayload, previousWindow, trend, fmtSec, habits, fmtMin, heatmap, sessions, streak, cleanup, serialize, mergeStores, ownKeys, kindOf, shuffleMode, openRecord, flush, closeRecord, applyState, recoverOpen, classify, isValidRecord, parseStore, emptyStore, rangeStart, aggregate, aggregateBetween, SCHEMA_VERSION, STORE_KEY };
 
   // En Node (tests) solo exportamos la lógica y salimos: no hay Spotify que esperar.
   if (typeof module !== "undefined" && module.exports) module.exports = core;
@@ -664,6 +677,7 @@
       const metaReq = tx.objectStore("meta").get(META_KEY);
       tx.oncomplete = () => resolve({ records: recReq.result ?? [], meta: metaReq.result ?? null });
       tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error ?? new Error("lectura abortada")); // sin esto, main() esperaría para siempre
     });
   }
 
@@ -702,14 +716,31 @@
     function backupRaw(raw, now) {
       try {
         LS.set(`${PREFIX}backup:${now}`, raw);
+        return true;
       } catch (e) {
         console.error(TAG, "no se pudo hacer copia de seguridad", e);
+        return false;
       }
     }
 
-    const db = await openDB();
-    const unsaved = []; // escuchas cerradas que IndexedDB aún no ha confirmado (viven también en el espejo)
+    let db = await openDB(); // pasa a null si la lectura falla: esa sesión va en modo básico (revisión final, I3)
+    let unsaved = []; // escuchas cerradas que IndexedDB aún no ha confirmado (viven también en el espejo)
     let meta = { schemaVersion: SCHEMA_VERSION, observingSince: Date.now() };
+
+    // Escribe el espejo síncrono (lo que sobrevive a un cierre brusco). Puede fallar si localStorage está lleno.
+    function writePending() {
+      try {
+        LS.set(PENDING_KEY, core.pendingPayload(store, unsaved));
+        saveFailed = false;
+      } catch (e) {
+        console.error(TAG, "no se pudo guardar", e);
+        if (!saveFailed) Spicetify.showNotification("Listening Intelligence: no se pudo guardar", true);
+        saveFailed = true;
+      }
+    }
+
+    let readFailed = false;
+    let backedUp = true;
 
     async function load(now) {
       const lsRaw = LS.get(STORE_KEY);
@@ -719,12 +750,17 @@
         try {
           idb = await idbAll(db);
         } catch (e) {
-          console.error(TAG, "no se pudo leer IndexedDB", e);
+          // NO se sigue con un historial vacío: escribir meta pisaría la fecha de inicio guardada.
+          // Esta sesión se guarda en localStorage (modo básico) y se une a IndexedDB en el próximo arranque.
+          console.error(TAG, "no se pudo leer IndexedDB; esta sesión va en modo básico", e);
+          Spicetify.showNotification("Listening Intelligence: no se pudo leer el historial. Lo de hoy se guarda aparte y se unirá al reiniciar Spotify", true);
+          db = null;
+          readFailed = true;
         }
       }
       const { store, toPut, migrated, dropped } = core.combineSources({ idbRecords: idb.records, idbMeta: idb.meta, lsRaw, pendingRaw }, now);
       if (lsRaw != null && (dropped > 0 || !migrated)) {
-        backupRaw(lsRaw, now); // registros inválidos o texto ilegible: copia intacta antes de seguir
+        backedUp = backupRaw(lsRaw, now); // registros inválidos o texto ilegible: copia intacta antes de seguir
         console.warn(TAG, migrated ? `${dropped} registro(s) inválido(s) descartado(s); copia guardada` : "datos antiguos ilegibles: copia guardada");
       }
       if (store.open) {
@@ -738,19 +774,35 @@
       }
       if (db) {
         meta = { ...(idb.meta ?? {}), schemaVersion: SCHEMA_VERSION, observingSince: store.observingSince };
+        let stored = false;
         try {
           await idbPut(db, toPut, meta);
-          // Confirmado en IndexedDB: ahora sí se aparta la clave antigua (renombrada, nunca borrada).
-          if (lsRaw != null) {
-            if (migrated) LS.set(`${PREFIX}migrated:${new Date(now).toISOString()}`, lsRaw);
-            LS.remove(STORE_KEY);
-            console.log(TAG, `migración a IndexedDB: ${toPut.length} registro(s) nuevos`);
-          }
-          LS.set(PENDING_KEY, core.pendingPayload(store, []));
+          stored = true;
         } catch (e) {
           // No se tocó nada de localStorage: el próximo arranque lo reintenta (combineSources es idempotente).
           console.error(TAG, "no se pudo escribir en IndexedDB; se reintentará", e);
           unsaved.push(...toPut);
+        }
+        if (stored && lsRaw != null) {
+          // Confirmado en IndexedDB: ahora se aparta la clave antigua. Primero se QUITA (libera sitio: migrar
+          // suele ser porque localStorage está lleno) y luego se intenta dejar la copia migrated: (revisión, I2).
+          // Si era ilegible, solo se quita si su copia backup: se guardó: nunca se borra el único original (RF-12).
+          if (migrated || backedUp) LS.remove(STORE_KEY);
+          if (migrated) {
+            try {
+              LS.set(`${PREFIX}migrated:${new Date(now).toISOString()}`, lsRaw);
+            } catch (e) {
+              console.warn(TAG, "sin sitio para la copia migrated: (los datos ya están en IndexedDB)", e);
+            }
+            console.log(TAG, `migración a IndexedDB: ${toPut.length} registro(s) nuevos`);
+          }
+        }
+        if (stored) {
+          try {
+            LS.set(PENDING_KEY, core.pendingPayload(store, unsaved)); // `store` local: el de main aún no existe aquí
+          } catch (e) {
+            console.warn(TAG, "no se pudo escribir el espejo pending", e);
+          }
         }
         navigator.storage?.persist?.().then((ok) => console.log(TAG, "almacenamiento persistente:", ok));
       }
@@ -758,18 +810,6 @@
     }
 
     const store = await load(Date.now());
-
-    // Escribe el espejo síncrono (lo que sobrevive a un cierre brusco). Puede fallar si localStorage está lleno.
-    function writePending() {
-      try {
-        LS.set(PENDING_KEY, core.pendingPayload(store, unsaved));
-        saveFailed = false;
-      } catch (e) {
-        console.error(TAG, "no se pudo guardar", e);
-        if (!saveFailed) Spicetify.showNotification("Listening Intelligence: no se pudo guardar", true);
-        saveFailed = true;
-      }
-    }
 
     // `newRecords`: escuchas recién cerradas o importadas que hay que llevar a IndexedDB.
     function save(newRecords = []) {
@@ -792,7 +832,7 @@
       const batch = [...unsaved];
       idbPut(db, batch, meta)
         .then(() => {
-          for (const r of batch) unsaved.splice(unsaved.indexOf(r), 1); // confirmado: fuera del espejo
+          unsaved = core.dropConfirmed(unsaved, batch); // confirmado: fuera del espejo
           writePending();
         })
         .catch((e) => console.error(TAG, "IndexedDB no confirmó; sigue en el espejo y se reintentará", e));
@@ -845,18 +885,27 @@
       core,
     };
     console.log(TAG, "registrando", `${store.records.length} registros`, db ? "(IndexedDB)" : "(modo básico)");
-    Spicetify.showNotification(db ? "Listening Intelligence registrando" : "Listening Intelligence: sin base de datos, guardando en modo básico", !db); // D-008
+    if (!readFailed) Spicetify.showNotification(db ? "Listening Intelligence registrando" : "Listening Intelligence: sin base de datos, guardando en modo básico", !db); // D-008
 
     // Borra SOLO lo nuestro: claves PREFIX (incluye pending, backup: y migrated:) e IndexedDB (RF-11, D-023).
-    function wipe() {
+    // Devuelve si se borró TODO (también IndexedDB): el pie avisa de éxito o de error (revisión final, I4).
+    async function wipe() {
       for (const k of ownKeys(Object.keys(window.localStorage))) LS.remove(k);
       store.records.length = 0; // se vacía el MISMO objeto: la UI y la consola lo siguen viendo
       store.open = null;
       store.observingSince = Date.now(); // el histórico empieza de nuevo desde ahora
-      unsaved.length = 0;
+      unsaved = [];
       meta = { schemaVersion: SCHEMA_VERSION, observingSince: store.observingSince }; // sin backupHandle: copia automática apagada
-      if (db) idbClear(db).then(() => idbPut(db, [], meta)).catch((e) => console.error(TAG, "no se pudo vaciar IndexedDB", e));
       save();
+      if (!db) return true;
+      try {
+        await idbClear(db);
+        await idbPut(db, [], meta);
+        return true;
+      } catch (e) {
+        console.error(TAG, "no se pudo vaciar IndexedDB", e);
+        return false;
+      }
     }
 
     // Texto de un archivo → se fusiona con lo que hay. Devuelve un mensaje para el usuario.
@@ -1037,8 +1086,11 @@
       }
       armed = false;
       del.textContent = "Borrar";
-      wipe();
-      Spicetify.showNotification("Datos de Listening Intelligence borrados");
+      Promise.resolve(wipe()).then((ok) =>
+        ok
+          ? Spicetify.showNotification("Datos de Listening Intelligence borrados")
+          : Spicetify.showNotification("No se pudo vaciar la base de datos: el historial volverá al reiniciar. Prueba a borrar otra vez", true)
+      );
       refresh();
     });
 
@@ -1242,7 +1294,7 @@
   // sel = { from, to } como "YYYY-MM-DD" (los <input type="date"> de la cabecera). pickDay(ymd) = ver solo ese día.
   function renderMemories(body, store, sel, pickDay) {
     const { from, to } = core.dayRange(sel.from, sel.to);
-    const m = core.memories(store.records, from, to, store.observingSince);
+    const m = core.memories(store.records, from, to, store.observingSince, Date.now());
     const blocks = [];
     if (m.clippedFrom > from) blocks.push(el("div", `Antes del ${fmtDate(store.observingSince)} no hay datos: la extensión aún no observaba.`, SUB));
     const totals = el("div", `${m.days.length} día${m.days.length === 1 ? "" : "s"} · ${fmtMin(m.agg.listenedMs)} · ${m.agg.valid} escuchas · observado desde ${fmtDate(store.observingSince)}`, SUB);

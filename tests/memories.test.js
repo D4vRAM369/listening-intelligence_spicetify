@@ -129,3 +129,10 @@ test("dmyToYmd / ymdToDmy: ida y vuelta, y rechaza fechas imposibles", () => {
   assert.equal(core.dmyToYmd(""), null);
   assert.equal(core.ymdToDmy("2026-02-01"), "01/02/2026");
 });
+
+// Revisión final: un año mal escrito (9999) no puede generar millones de barras.
+test("memories: el final del rango se limita a hoy", () => {
+  const { from, to } = core.dayRange("2026-11-01", "9999-12-31");
+  const m = core.memories([], from, to, OBS, at(2026, 10, 14, 18));
+  assert.equal(m.days.length, 14); // del 1 al 14 de noviembre
+});
