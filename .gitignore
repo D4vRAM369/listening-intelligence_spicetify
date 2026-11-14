@@ -1,0 +1,14 @@
+# Documentación interna (Chronicler) y notas de planificación: no se versionan
+docs/
+COMPARATIVA_LISTENING_INTELLIGENCE_MUSICAL_DNA.md
+ROADMAP_FUTURAS_EXTENSIONES_SPICETIFY_IDEAS.md
+
+# Estado local de herramientas
+.omc/
+.superpowers/
+.claude/
+
+# Exportaciones del historial de escucha (datos personales)
+listening-intelligence-*.json
+
+node_modules/
