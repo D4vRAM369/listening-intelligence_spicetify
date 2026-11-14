@@ -315,3 +315,17 @@ test("Recuerdos: pestaña con la canción del periodo; pulsar un día no cierra 
   assert.ok(click(root, findButton(root, "Todo")), "un atajo no cierra el modal");
   assert.match(textOf(root), /Cada barra es un día/);
 });
+
+test("Tal día como hoy: la tarjeta sale en Resumen solo si hay música de esa fecha (D-024)", async () => {
+  const clock = { t: new Date(2026, 10, 14, 12).getTime() };
+  const t = new Date(2026, 9, 14, 20).getTime(); // hace un mes
+  const r = { id: "otd", uri: "spotify:track:O", kind: "track", title: "Canción O", artists: [{ uri: null, name: "Artista O" }],
+    albumUri: null, contextUri: null, shuffle: "off", durationMs: 200 * S, startedAt: t, playedMs: 120 * S, pauses: 0, endedAt: t + 120 * S };
+  let s = await boot({ "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: t, open: null, records: [r] }) }, clock);
+  s.L.topbarClick();
+  assert.match(textOf(s.L.modal.content), /Tal día como hoy, hace un mes.*Escuchabas Canción O · Artista O \(1 vez\)/s);
+
+  s = await boot({ "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: t, open: null, records: [{ ...r, startedAt: t - 86400 * S, endedAt: t - 86400 * S + 120 * S }] }) }, clock);
+  s.L.topbarClick();
+  assert.doesNotMatch(textOf(s.L.modal.content), /Tal día como hoy/);
+});

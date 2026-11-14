@@ -104,3 +104,18 @@ test("memories: un cambio de hora no descuadra las barras (Europe/Madrid, 25-oct
     assert.equal(m.days[2].start - m.days[1].start, DAY + 3600 * S); // el 25 dura 25 h (se atrasa el reloj)
   });
 });
+
+// «Tal día como hoy» (D-024): hace un año; si ese día no hay nada, hace un mes; si tampoco, null.
+test("onThisDay: hace un año, si no hace un mes, si no nada", () => {
+  const now = at(2026, 10, 14, 18);
+  assert.equal(core.onThisDay([rec("spotify:track:YR", at(2025, 10, 14, 10))], now).label, "hace un año");
+  const month = core.onThisDay([rec("spotify:track:MO", at(2026, 9, 14, 10))], now);
+  assert.equal(month.label, "hace un mes");
+  assert.equal(month.track.uri, "spotify:track:MO");
+  assert.equal(core.onThisDay([rec("spotify:track:XX", at(2026, 9, 13, 10))], now), null);
+});
+
+test("onThisDay: fin de mes sin desbordar (31-mar → 28-feb, 29-feb → 28-feb)", () => {
+  assert.equal(core.onThisDay([rec("spotify:track:FE", at(2027, 1, 28, 10))], at(2027, 2, 31, 18)).label, "hace un mes");
+  assert.equal(core.onThisDay([rec("spotify:track:LP", at(2027, 1, 28, 10))], at(2028, 1, 29, 18)).label, "hace un año");
+});

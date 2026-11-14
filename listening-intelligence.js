@@ -588,7 +588,20 @@
     };
   }
 
-  const core = { memories, dayRange, shortcut, slot, shiftMonths, combineSources, pendingPayload, previousWindow, trend, fmtSec, habits, fmtMin, heatmap, sessions, streak, cleanup, serialize, mergeStores, ownKeys, kindOf, shuffleMode, openRecord, flush, closeRecord, applyState, recoverOpen, classify, isValidRecord, parseStore, emptyStore, rangeStart, aggregate, aggregateBetween, SCHEMA_VERSION, STORE_KEY };
+  // «Tal día como hoy»: el mismo día del calendario hace un año o, si no sonó nada, hace un mes.
+  // null si ninguno de los dos tiene música: la tarjeta no aparece (ni un hueco vacío).
+  function onThisDay(records, now) {
+    for (const [months, label] of [[-12, "hace un año"], [-1, "hace un mes"]]) {
+      const from = dayStart(shiftMonths(now, months));
+      const next = new Date(from);
+      next.setDate(next.getDate() + 1);
+      const track = aggregateBetween(records, from, next.getTime()).topTracks[0];
+      if (track) return { label, track };
+    }
+    return null;
+  }
+
+  const core = { onThisDay, memories, dayRange, shortcut, slot, shiftMonths, combineSources, pendingPayload, previousWindow, trend, fmtSec, habits, fmtMin, heatmap, sessions, streak, cleanup, serialize, mergeStores, ownKeys, kindOf, shuffleMode, openRecord, flush, closeRecord, applyState, recoverOpen, classify, isValidRecord, parseStore, emptyStore, rangeStart, aggregate, aggregateBetween, SCHEMA_VERSION, STORE_KEY };
 
   // En Node (tests) solo exportamos la lógica y salimos: no hay Spotify que esperar.
   if (typeof module !== "undefined" && module.exports) module.exports = core;
@@ -1025,6 +1038,14 @@
 
   // Dibuja (o redibuja) los bloques 2-5 para un rango. El selector (bloque 1) NO se toca aquí:
   // si se borrara el chip pulsado, el PopupModal cerraría la ventana (Error #6).
+  function onThisDayCard({ label, track }) {
+    const c = el("div", null, "display:flex;align-items:center;gap:12px;background:var(--spice-card);border-radius:8px;padding:10px 14px");
+    const t = el("div", null, "flex:1;min-width:0");
+    t.append(el("div", `Tal día como hoy, ${label}`, H), el("div", `Escuchabas ${track.name} · ${track.artists} (${track.count} ${track.count === 1 ? "vez" : "veces"})`, `${SUB};${CUT}`));
+    c.append(t, playButton(track.uri));
+    return c;
+  }
+
   function renderBody(body, store, range) {
     const now = Date.now();
     const s = core.aggregate(store.records, range, now);
@@ -1072,7 +1093,8 @@
     week.append(legend, heatGrid(heatmap(store.records, range, now), rows), wcards);
 
     if (w && !anyArrow) trendLegend.textContent = "Sin tendencias: en el periodo anterior no sonó música.";
-    body.replaceChildren(trendLegend, cards, tops, section("Tu semana sonora", week));
+    const past = core.onThisDay(store.records, now); // D-024: solo si hay datos de esa fecha
+    body.replaceChildren(...(past ? [onThisDayCard(past)] : []), trendLegend, cards, tops, section("Tu semana sonora", week));
   }
 
   // ─── Pestaña «Limpieza» (A1) ───
