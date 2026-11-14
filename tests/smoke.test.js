@@ -366,7 +366,7 @@ test("Recuerdos: pestaña con la canción del periodo; pulsar un día no cierra 
   assert.ok(click(root, findButton(root, "Todo")), "un atajo no cierra el modal");
   assert.match(textOf(root), /Cada barra es un día/);
 
-  // Fechas en DD/MM/AAAA, escritas a mano (pedido por Brian).
+  // Fechas en DD/MM/AAAA, escritas a mano (a petición del usuario).
   const inputs = (n) => [...(n.placeholder === "dd/mm/aaaa" ? [n] : []), ...n.children.flatMap(inputs)];
   const [fromBox, toBox] = inputs(root);
   assert.equal(fromBox.value, "09/11/2026");

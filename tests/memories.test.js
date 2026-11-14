@@ -120,7 +120,7 @@ test("onThisDay: fin de mes sin desbordar (31-mar → 28-feb, 29-feb → 28-feb)
   assert.equal(core.onThisDay([rec("spotify:track:LP", at(2027, 1, 28, 10))], at(2028, 1, 29, 18)).label, "hace un año");
 });
 
-// Fechas en DD/MM/AAAA (pedido por Brian): el campo es texto; por dentro seguimos con "YYYY-MM-DD".
+// Fechas en DD/MM/AAAA (a petición del usuario): el campo es texto; por dentro seguimos con "YYYY-MM-DD".
 test("dmyToYmd / ymdToDmy: ida y vuelta, y rechaza fechas imposibles", () => {
   assert.equal(core.dmyToYmd("14/11/2026"), "2026-11-14");
   assert.equal(core.dmyToYmd("1/2/2026"), "2026-02-01"); // sin ceros a la izquierda también vale
