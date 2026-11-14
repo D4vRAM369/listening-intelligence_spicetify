@@ -314,6 +314,20 @@ test("Recuerdos: pestaña con la canción del periodo; pulsar un día no cierra 
 
   assert.ok(click(root, findButton(root, "Todo")), "un atajo no cierra el modal");
   assert.match(textOf(root), /Cada barra es un día/);
+
+  // Fechas en DD/MM/AAAA, escritas a mano (pedido por Brian).
+  const inputs = (n) => [...(n.placeholder === "dd/mm/aaaa" ? [n] : []), ...n.children.flatMap(inputs)];
+  const [fromBox, toBox] = inputs(root);
+  assert.equal(fromBox.value, "09/11/2026");
+  fromBox.value = "12/11/2026";
+  fromBox.listeners.change();
+  toBox.value = "12/11/2026";
+  toBox.listeners.change();
+  assert.match(textOf(root), /12\/11\/2026, hora a hora/);
+  fromBox.value = "31/02/2026"; // no existe: se marca en rojo y no se recalcula
+  fromBox.listeners.change();
+  assert.match(fromBox.style.borderColor, /notification-error/);
+  assert.match(textOf(root), /12\/11\/2026, hora a hora/);
 });
 
 test("Tal día como hoy: la tarjeta sale en Resumen solo si hay música de esa fecha (D-024)", async () => {

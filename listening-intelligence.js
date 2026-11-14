@@ -542,6 +542,18 @@
     return { from: ymd(observingSince), to: ymd(now) }; // "all"
   }
 
+  // El campo de fecha es texto DD/MM/AAAA (el <input type="date"> nativo sigue el idioma de Chromium: MM/DD).
+  // "14/11/2026" → "2026-11-14"; null si no es una fecha real (31/02) o no tiene ese formato.
+  function dmyToYmd(str) {
+    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(str).trim());
+    if (!m) return null;
+    const [d, mo, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const dt = new Date(y, mo - 1, d);
+    if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null; // 31/02 «rebota» a marzo
+    return `${y}-${pad2(mo)}-${pad2(d)}`;
+  }
+  const ymdToDmy = (ymdStr) => ymdStr.split("-").reverse().join("/");
+
   const slot = (h) => (h < 6 ? "madrugada" : h < 12 ? "mañana" : h < 20 ? "tarde" : "noche");
 
   // Lo que sonaba entre from y to → los bloques de la pestaña. Pura (no lee el reloj).
@@ -601,7 +613,7 @@
     return null;
   }
 
-  const core = { onThisDay, memories, dayRange, shortcut, slot, shiftMonths, combineSources, pendingPayload, previousWindow, trend, fmtSec, habits, fmtMin, heatmap, sessions, streak, cleanup, serialize, mergeStores, ownKeys, kindOf, shuffleMode, openRecord, flush, closeRecord, applyState, recoverOpen, classify, isValidRecord, parseStore, emptyStore, rangeStart, aggregate, aggregateBetween, SCHEMA_VERSION, STORE_KEY };
+  const core = { dmyToYmd, ymdToDmy, onThisDay, memories, dayRange, shortcut, slot, shiftMonths, combineSources, pendingPayload, previousWindow, trend, fmtSec, habits, fmtMin, heatmap, sessions, streak, cleanup, serialize, mergeStores, ownKeys, kindOf, shuffleMode, openRecord, flush, closeRecord, applyState, recoverOpen, classify, isValidRecord, parseStore, emptyStore, rangeStart, aggregate, aggregateBetween, SCHEMA_VERSION, STORE_KEY };
 
   // En Node (tests) solo exportamos la lógica y salimos: no hay Spotify que esperar.
   if (typeof module !== "undefined" && module.exports) module.exports = core;
@@ -1318,17 +1330,48 @@
       const chips = RANGES.map(([key, label]) => button(label, "", () => setRange(key)));
       // Recuerdos: fechas + atajos, también creados UNA vez (Error #6). Solo se ven en esa pestaña.
       const memRow = el("div", null, "display:none;flex-direction:column;gap:8px");
+      // Campo de fecha: texto DD/MM/AAAA + botón 📅 que abre el calendario nativo (oculto, pero dentro del
+      // DOM: showPicker() necesita un elemento renderizado). Por dentro el valor es "YYYY-MM-DD".
       const dateIn = () => {
-        const i = el("input", null, "background:var(--spice-card);color:var(--spice-text);border:none;border-radius:4px;padding:6px 8px;font-size:13px;color-scheme:dark");
-        i.type = "date";
-        i.addEventListener("change", () => i.value && refresh()); // vacío (borrado a mano) = no hacer nada
-        return i;
+        const wrap = el("div", null, "position:relative;display:flex;align-items:center;gap:4px");
+        const text = el("input", null, "width:96px;background:var(--spice-card);color:var(--spice-text);border:1px solid transparent;border-radius:4px;padding:6px 8px;font-size:13px");
+        text.placeholder = "dd/mm/aaaa";
+        const picker = el("input", null, "position:absolute;left:0;bottom:0;width:0;height:0;opacity:0;border:0;padding:0");
+        picker.type = "date";
+        picker.tabIndex = -1;
+        const field = {
+          wrap,
+          ymd: "",
+          set(v) {
+            field.ymd = v;
+            text.value = ymdToDmy(v);
+            text.style.borderColor = "transparent";
+          },
+        };
+        text.addEventListener("change", () => {
+          const v = core.dmyToYmd(text.value);
+          if (!v) return void (text.style.borderColor = RED); // fecha no válida: se marca y no se recalcula
+          field.set(v);
+          refresh();
+        });
+        picker.addEventListener("change", () => {
+          if (!picker.value) return;
+          field.set(picker.value);
+          refresh();
+        });
+        const cal = button("📅", `${OFF};padding:4px 8px`, () => {
+          picker.value = field.ymd;
+          picker.showPicker?.(); // sin showPicker (Chromium antiguo) se escribe a mano
+        });
+        cal.title = "Elegir en el calendario";
+        wrap.append(text, cal, picker);
+        return field;
       };
       const fromIn = dateIn();
       const toIn = dateIn();
       const setSel = ({ from, to }) => {
-        fromIn.value = from;
-        toIn.value = to;
+        fromIn.set(from);
+        toIn.set(to);
         refresh();
       };
       const pickDay = (start) => {
@@ -1338,13 +1381,15 @@
       };
       const shortcuts = SHORTCUTS.map(([key, label]) => button(label, OFF, () => setSel(core.shortcut(key, Date.now(), store.observingSince))));
       const datesLine = el("div", null, "display:flex;gap:8px;align-items:center;flex-wrap:wrap");
-      datesLine.append(fromIn, el("span", "→", SUB), toIn);
+      datesLine.append(fromIn.wrap, el("span", "→", SUB), toIn.wrap);
       const shortLine = el("div", null, "display:flex;gap:8px;flex-wrap:wrap");
       shortLine.append(...shortcuts);
       memRow.append(datesLine, shortLine);
-      ({ from: fromIn.value, to: toIn.value } = core.shortcut("all", Date.now(), store.observingSince)); // por defecto: todo
+      const all = core.shortcut("all", Date.now(), store.observingSince); // por defecto: todo
+      fromIn.set(all.from);
+      toIn.set(all.to);
       const refresh = () => {
-        if (view === "memories") renderMemories(body, store, { from: fromIn.value, to: toIn.value }, pickDay); // Recuerdos: su propio rango
+        if (view === "memories") renderMemories(body, store, { from: fromIn.ymd, to: toIn.ymd }, pickDay); // Recuerdos: su propio rango
         else if (view === "cleanup") renderCleanup(body, store); // Limpieza: todo el historial
         else if (view === "habits") renderHabits(body, store, range); // Cómo escuchas: el rango elegido
         else renderBody(body, store, range); // Resumen: el rango elegido
