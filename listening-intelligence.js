@@ -276,6 +276,15 @@
     return { store, toPut, migrated, dropped };
   }
 
+  // Copia de seguridad (D-023, Parte 2). Spotify no permite recuperar el permiso de escritura tras
+  // reiniciarse (spike 2026-11-14), así que no hay copia automática: el pie recuerda la última de Exportar.
+  const BACKUP_KEY = PREFIX + "lastBackup";
+  function backupLine(lastBackupAt, now) {
+    if (!Number.isFinite(lastBackupAt)) return "Sin copia de seguridad todavía: usa Exportar";
+    const days = Math.round((dayStart(now) - dayStart(lastBackupAt)) / 86400000); // round: un día de 23 o 25 h sigue siendo 1
+    return days <= 0 ? "Última copia: hoy" : days === 1 ? "Última copia: ayer" : `Última copia: hace ${days} días`;
+  }
+
   // Lote confirmado por IndexedDB → fuera de `unsaved`. Por `id`: si otro lote ya lo había quitado, no se
   // lleva por delante a nadie más (splice(indexOf = -1) borraba el ÚLTIMO: revisión final, I1).
   function dropConfirmed(unsaved, batch) {
@@ -626,7 +635,7 @@
     return null;
   }
 
-  const core = { dropConfirmed, dmyToYmd, ymdToDmy, onThisDay, memories, dayRange, shortcut, slot, shiftMonths, combineSources, pendingPayload, previousWindow, trend, fmtSec, habits, fmtMin, heatmap, sessions, streak, cleanup, serialize, mergeStores, ownKeys, kindOf, shuffleMode, openRecord, flush, closeRecord, applyState, recoverOpen, classify, isValidRecord, parseStore, emptyStore, rangeStart, aggregate, aggregateBetween, SCHEMA_VERSION, STORE_KEY };
+  const core = { backupLine, dropConfirmed, dmyToYmd, ymdToDmy, onThisDay, memories, dayRange, shortcut, slot, shiftMonths, combineSources, pendingPayload, previousWindow, trend, fmtSec, habits, fmtMin, heatmap, sessions, streak, cleanup, serialize, mergeStores, ownKeys, kindOf, shuffleMode, openRecord, flush, closeRecord, applyState, recoverOpen, classify, isValidRecord, parseStore, emptyStore, rangeStart, aggregate, aggregateBetween, SCHEMA_VERSION, STORE_KEY };
 
   // En Node (tests) solo exportamos la lógica y salimos: no hay Spotify que esperar.
   if (typeof module !== "undefined" && module.exports) module.exports = core;
@@ -1048,6 +1057,7 @@
       await w.write(text);
       await w.close();
       Spicetify.showNotification(`Exportadas ${store.records.length} escuchas`);
+      Spicetify.LocalStorage.set(BACKUP_KEY, String(Date.now())); // solo un archivo guardado cuenta como copia (el portapapeles no)
     } catch (e) {
       if (e?.name === "AbortError") return; // el usuario canceló el diálogo: no es un error
       console.warn(TAG, "no se pudo guardar el archivo; copio al portapapeles", e);
@@ -1094,9 +1104,10 @@
       refresh();
     });
 
-    actions.append(button("Exportar", OFF, () => exportStore(store)), button("Importar", OFF, () => file.click()), del, file);
+    actions.append(button("Exportar", OFF, () => exportStore(store).then(() => update())), button("Importar", OFF, () => file.click()), del, file);
     foot.append(info, actions);
-    const update = () => (info.textContent = `Observando desde ${new Date(store.observingSince).toLocaleDateString("es-ES")} · ${store.records.length} registros`);
+    const update = () =>
+      (info.textContent = `Observando desde ${new Date(store.observingSince).toLocaleDateString("es-ES")} · ${store.records.length} registros · ${backupLine(Number(Spicetify.LocalStorage.get(BACKUP_KEY) ?? NaN), Date.now())}`);
     return { foot, update };
   }
 

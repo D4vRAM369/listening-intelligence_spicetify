@@ -67,3 +67,13 @@ test("dropConfirmed: quita solo lo confirmado, aunque otro lote ya lo hubiera qu
   assert.deepEqual(core.dropConfirmed([r2, r3], [r1, r2]).map((r) => r.id), [r3.id]); // r1 ya no estaba: r3 se queda
   assert.deepEqual(core.dropConfirmed([], [r1]), []);
 });
+
+// Parte 2 (D-023): sin copia automática posible en Spotify, el pie recuerda cuándo fue la última copia.
+test("backupLine: cuándo fue la última copia, en días de calendario", () => {
+  const now = new Date(2026, 10, 14, 18).getTime();
+  assert.equal(core.backupLine(null, now), "Sin copia de seguridad todavía: usa Exportar");
+  assert.equal(core.backupLine(new Date(2026, 10, 14, 9).getTime(), now), "Última copia: hoy");
+  assert.equal(core.backupLine(new Date(2026, 10, 13, 23).getTime(), now), "Última copia: ayer");
+  assert.equal(core.backupLine(new Date(2026, 10, 2, 12).getTime(), now), "Última copia: hace 12 días");
+  assert.equal(core.backupLine(new Date(2026, 9, 20, 12).getTime(), new Date(2026, 9, 26, 12).getTime()), "Última copia: hace 6 días"); // cruza el cambio de hora
+});
