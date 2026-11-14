@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/banner.png" alt="Listening Intelligence: qué, cuándo y cómo escuchas en Spotify"></p>
+
 # Listening Intelligence
 
 Extensión de [Spicetify](https://spicetify.app) que registra **qué, cuándo y cómo escuchas** en Spotify y te lo enseña en un panel. Todo se queda en tu equipo.

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Listening Intelligence">
+  <!-- Icono: el mismo motivo que el botón de la barra de Spotify (reloj + barras), en versión app. -->
+  <rect width="512" height="512" rx="112" fill="#12161c"/>
+  <circle cx="256" cy="256" r="168" fill="none" stroke="#e9e6df" stroke-width="34"/>
+  <!-- Tres barras: lo escuchado a lo largo del tiempo. La central, la más alta. -->
+  <rect x="166" y="262" width="44" height="98" rx="22" fill="#5fd4b8"/>
+  <rect x="234" y="178" width="44" height="182" rx="22" fill="#5fd4b8"/>
+  <rect x="302" y="222" width="44" height="138" rx="22" fill="#f2b45a"/>
+</svg>
