@@ -18,6 +18,15 @@
   const MISSED_DAYS = 30; // …y la última hace MÁS de 30 días
   const PLAYLIST_MIN = 10; // una playlist necesita 10 escuchas para opinar sobre ella
   const LIST_MAX = 10;
+  // «Cómo escuchas» (C, D-021): hábitos, no gustos (frontera con Musical DNA). Mejor sin datos que con 3.
+  const HABITS_MIN = 20; // escuchas mínimas en el rango para sacar conclusiones
+  const COMPLETE_RATIO = 0.9; // «entera» = al menos el 90 % de la canción
+  const FAST_SKIP_S = 10; // insignia ⏭: mediana de saltos por debajo de 10 s
+  const REPEAT_HIGH = 0.7; // 🔁: al menos el 70 % de las válidas son canciones ya escuchadas
+  const EXPLORE_HIGH = 0.5; // 🧭: al menos el 50 % son primeras veces
+  const ALBUM_HIGH = 0.5; // 💿: al menos la mitad desde álbumes
+  const SHUFFLE_GAP = 0.2; // 🎲: con aleatorio saltas 20 puntos más que sin él
+  const WHOLE_HIGH = 0.8; // 🎧: atención media de al menos el 80 %
   const SESSION_GAP_MIN = 20; // «Tu semana sonora» (B, D-020): hueco máximo dentro de una misma sesión
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -300,6 +309,88 @@
     return { current, best };
   }
 
+  // ─── Cómo escuchas (C) ───
+
+  const pct = (x) => `${Math.round(x * 100)} %`;
+  // ms → «9,6 s». TRUNCA a una décima (no redondea): 9 999 ms es «9,9 s», nunca «10 s», que contradiría «menos de 10 s».
+  const fmtSec = (ms) => `${(Math.floor(ms / 100) / 10).toLocaleString("es-ES")} s`;
+  const median = (xs) => {
+    if (!xs.length) return null;
+    const a = [...xs].sort((x, y) => x - y), m = a.length >> 1; // >> 1 = dividir entre 2 sin decimales
+    return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; // par → media de los dos centrales
+  };
+  // Tipo de sitio desde el que se lanzó la música, a partir de su URI.
+  function sourceOf(ctx) {
+    for (const k of ["playlist", "album", "artist", "track"]) if (ctx?.startsWith(`spotify:${k}:`)) return k;
+    return "other"; // nulo, «Tus me gusta» (…:collection), radio…
+  }
+
+  // Rango → hábitos de escucha. Usa tiempos, saltos, aleatorio, repetición por PISTA y contexto: nunca artistas.
+  function habits(records, range, now) {
+    const rs = musicIn(records, range, now);
+    if (rs.length < HABITS_MIN) return { n: rs.length, enough: false };
+    const isValid = (r) => classify(r.playedMs, r.durationMs) === "valid";
+
+    // Primera escucha válida de cada pista en TODO el historial: lo anterior a ella es «descubrir», lo posterior «repetir».
+    const firstValid = new Map();
+    for (const r of records) if (r.kind === "track" && isValid(r) && !(firstValid.get(r.uri) <= r.startedAt)) firstValid.set(r.uri, r.startedAt);
+
+    let completed = 0, skipped = 0, ratioSum = 0, ratioN = 0, valid = 0, repeated = 0;
+    const skipMs = [];
+    const shuffle = { on: [0, 0], off: [0, 0] }; // [saltadas, total]
+    const sources = { playlist: 0, album: 0, artist: 0, track: 0, other: 0 };
+    for (const r of rs) {
+      const v = isValid(r);
+      if (r.durationMs > 0) {
+        const ratio = Math.min(r.playedMs / r.durationMs, 1); // un bucle (D-007) no cuenta más de 1
+        ratioSum += ratio;
+        ratioN += 1;
+        if (ratio >= COMPLETE_RATIO) completed += 1;
+      }
+      if (!v) {
+        skipped += 1;
+        skipMs.push(r.playedMs);
+      } else {
+        valid += 1;
+        if (firstValid.get(r.uri) < r.startedAt) repeated += 1;
+      }
+      const g = shuffle[r.shuffle === "off" ? "off" : "on"]; // «on» y «smart» cuentan como aleatorio
+      g[1] += 1;
+      if (!v) g[0] += 1;
+      sources[sourceOf(r.contextUri)] += 1;
+    }
+    const rate = ([sk, tot]) => (tot ? sk / tot : null); // null: no hay con qué comparar
+    const h = {
+      n: rs.length,
+      enough: true,
+      attention: ratioN ? ratioSum / ratioN : null,
+      completed,
+      partial: rs.length - completed - skipped,
+      skipped,
+      patienceMs: median(skipMs),
+      shuffleSkip: { on: rate(shuffle.on), off: rate(shuffle.off) },
+      repeatShare: valid ? repeated / valid : null,
+      sources,
+    };
+
+    // Insignias: cada una lleva su regla y su cifra (explicable, no «personalidad»).
+    const b = [];
+    if (h.patienceMs != null && h.patienceMs < FAST_SKIP_S * 1000)
+      b.push({ id: "fastSkip", label: "⏭ Saltas rápido", rule: `Cuando saltas, lo haces a los ${fmtSec(h.patienceMs)} (mediana; menos de ${FAST_SKIP_S} s)` });
+    if (h.repeatShare != null && h.repeatShare >= REPEAT_HIGH)
+      b.push({ id: "repeat", label: "🔁 Repites mucho", rule: `${pct(h.repeatShare)} de tus escuchas válidas son canciones que ya habías escuchado (${pct(REPEAT_HIGH)} o más)` });
+    if (h.repeatShare != null && 1 - h.repeatShare >= EXPLORE_HIGH)
+      b.push({ id: "explore", label: "🧭 Exploras", rule: `${pct(1 - h.repeatShare)} de tus escuchas válidas son primeras veces (${pct(EXPLORE_HIGH)} o más)` });
+    if (sources.album / h.n >= ALBUM_HIGH)
+      b.push({ id: "albums", label: "💿 Oyente de álbumes", rule: `${pct(sources.album / h.n)} de lo que escuchas sale de álbumes (${pct(ALBUM_HIGH)} o más)` });
+    const { on, off } = h.shuffleSkip;
+    if (on != null && off != null && on - off >= SHUFFLE_GAP)
+      b.push({ id: "shuffleBored", label: "🎲 El aleatorio te aburre", rule: `Con aleatorio saltas el ${pct(on)}; sin él, el ${pct(off)} (${Math.round(SHUFFLE_GAP * 100)} puntos o más de diferencia)` });
+    if (h.attention != null && h.attention >= WHOLE_HIGH)
+      b.push({ id: "wholeSongs", label: "🎧 Escuchas entero", rule: `Oyes de media el ${pct(h.attention)} de cada canción (${pct(WHOLE_HIGH)} o más)` });
+    return { ...h, badges: b.slice(0, 4) };
+  }
+
   // ─── Limpieza (A1) ───
   // Todo el historial → tres listas accionables. Una pasada, agrupando por pista y por playlist.
   function cleanup(records, now) {
@@ -337,7 +428,7 @@
     return { alwaysSkipped: alwaysSkipped.slice(0, LIST_MAX), missed: missed.slice(0, LIST_MAX), playlists: playlists.slice(0, LIST_MAX) };
   }
 
-  const core = { fmtMin, heatmap, sessions, streak, cleanup, serialize, mergeStores, ownKeys, kindOf, shuffleMode, openRecord, flush, closeRecord, applyState, recoverOpen, classify, isValidRecord, parseStore, emptyStore, rangeStart, aggregate, SCHEMA_VERSION, STORE_KEY };
+  const core = { fmtSec, habits, fmtMin, heatmap, sessions, streak, cleanup, serialize, mergeStores, ownKeys, kindOf, shuffleMode, openRecord, flush, closeRecord, applyState, recoverOpen, classify, isValidRecord, parseStore, emptyStore, rangeStart, aggregate, SCHEMA_VERSION, STORE_KEY };
 
   // En Node (tests) solo exportamos la lógica y salimos: no hay Spotify que esperar.
   if (typeof module !== "undefined" && module.exports) module.exports = core;
@@ -668,7 +759,7 @@
   }
 
   // ─── Pestaña «Limpieza» (A1) ───
-  const VIEWS = [["summary", "Resumen"], ["cleanup", "Limpieza"]];
+  const VIEWS = [["summary", "Resumen"], ["habits", "Cómo escuchas"], ["cleanup", "Limpieza"]];
   // Pestañas = texto subrayado, para no confundirlas con los chips de rango (que son píldoras).
   const TAB_ON = "background:none;border-radius:0;padding:6px 2px;color:var(--spice-text);border-bottom:2px solid var(--spice-button)";
   const TAB_OFF = "background:none;border-radius:0;padding:6px 2px;color:var(--spice-subtext);border-bottom:2px solid transparent";
@@ -712,6 +803,62 @@
     return box;
   }
 
+  // ─── Pestaña «Cómo escuchas» (C) ───
+  const SOURCE_LABELS = { playlist: "Playlists", album: "Álbumes", artist: "Artistas", track: "Canciones sueltas", other: "Otros (Tus me gusta, radio…)" };
+  const SOURCE_SHADES = { playlist: 1, album: 0.75, artist: 0.5, track: 0.3, other: 0.15 }; // un solo color del tema, distintas intensidades
+
+  function renderHabits(body, store, range) {
+    const h = habits(store.records, range, Date.now());
+    if (!h.enough) {
+      body.replaceChildren(el("div", `Necesita al menos ${HABITS_MIN} escuchas en este rango (llevas ${h.n}). Prueba con «7 días» o «30 días».`, SUB));
+      return;
+    }
+    // Insignias: la regla y la cifra van en el title (al pasar el ratón): explicable, no «personalidad».
+    const badges = el("div", null, "display:flex;gap:8px;flex-wrap:wrap");
+    for (const b of h.badges) {
+      const chip = el("span", b.label, "background:var(--spice-card);border-radius:999px;padding:6px 12px;font-size:13px;font-weight:700;cursor:help");
+      chip.title = b.rule;
+      badges.append(chip);
+    }
+    if (!h.badges.length) badges.append(el("span", "Sin insignias en este rango: ningún hábito destaca todavía.", SUB));
+
+    const dash = (x, f) => (x == null ? "—" : f(x)); // null → «—» (no hay con qué calcularlo)
+    const cards = el("div", null, "display:flex;gap:12px;flex-wrap:wrap");
+    cards.append(
+      card(`de cada canción · ${h.completed} enteras, ${h.partial} a medias, ${h.skipped} saltadas`, dash(h.attention, pct)),
+      card("antes de saltar (mediana)", dash(h.patienceMs, fmtSec)),
+      // Una cifra grande y la otra en la etiqueta: «x % / y %» no cabía y se partía en dos líneas.
+      h.shuffleSkip.off != null
+        ? card(`saltas sin aleatorio · con aleatorio: ${dash(h.shuffleSkip.on, pct)}`, pct(h.shuffleSkip.off))
+        : card("saltas con aleatorio · sin aleatorio: —", dash(h.shuffleSkip.on, pct)),
+      card(`repites · ${dash(h.repeatShare, (r) => pct(1 - r))} descubres`, dash(h.repeatShare, pct))
+    );
+
+    // Desde dónde: barra apilada + leyenda
+    const keys = Object.keys(SOURCE_LABELS).filter((k) => h.sources[k] > 0);
+    const bar = el("div", null, "display:flex;height:12px;border-radius:6px;overflow:hidden;background:var(--spice-card)");
+    const legend = el("div", null, "display:flex;gap:6px 16px;flex-wrap:wrap;font-size:13px");
+    for (const k of keys) {
+      const share = h.sources[k] / h.n;
+      const color = `background:var(--spice-button);opacity:${SOURCE_SHADES[k]}`;
+      const seg = el("div", null, `width:${share * 100}%;${color}`);
+      seg.title = `${SOURCE_LABELS[k]}: ${pct(share)}`;
+      bar.append(seg);
+      const item = el("span", null, "display:flex;align-items:center;gap:6px");
+      item.append(el("span", null, `display:inline-block;width:10px;height:10px;border-radius:2px;${color}`), el("span", `${SOURCE_LABELS[k]} ${pct(share)}`));
+      legend.append(item);
+    }
+    const from = el("div", null, "display:flex;flex-direction:column;gap:8px");
+    from.append(bar, legend);
+
+    body.replaceChildren(
+      el("div", `Calculado con ${h.n} escuchas de este rango. Pasa el ratón por una insignia para ver su regla.`, SUB),
+      badges,
+      cards,
+      section("Desde dónde pones la música", from)
+    );
+  }
+
   function renderCleanup(body, store) {
     const now = Date.now();
     const c = cleanup(store.records, now);
@@ -742,6 +889,7 @@
       const chips = RANGES.map(([key, label]) => button(label, "", () => setRange(key)));
       const refresh = () => {
         if (view === "cleanup") renderCleanup(body, store); // Limpieza: todo el historial
+        else if (view === "habits") renderHabits(body, store, range); // Cómo escuchas: el rango elegido
         else renderBody(body, store, range); // Resumen: el rango elegido
         footer.update(); // solo el texto del pie
       };

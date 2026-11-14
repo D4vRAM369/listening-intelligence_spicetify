@@ -135,6 +135,11 @@ test("panel: abre con un registro corrupto y cambia de rango (RF-06, RF-13, CA-0
   const header = parentOf(root, parentOf(root, findButton(root, "Resumen")));
   assert.match(header.style.cssText, /position:sticky/); // pestañas y chips no se van al hacer scroll
   assert.ok(contains(header, findButton(root, "7 días")));
+
+  // C: pestaña «Cómo escuchas» con poco historial → aviso, sin cerrar el modal; los chips de rango siguen visibles
+  assert.ok(click(root, findButton(root, "Cómo escuchas")), "cambiar a «Cómo escuchas» no cierra el modal");
+  assert.match(textOf(root), /Necesita al menos 20 escuchas en este rango \(llevas 1\)/);
+  assert.notEqual(parentOf(root, findButton(root, "Hoy")).style.display, "none");
   assert.doesNotMatch(text, /Por hora del día/);
   assert.match(text, /1 sesión/);
   assert.match(text, /días seguidos · récord 1/);
@@ -192,4 +197,25 @@ test("Limpieza: pestaña sin cerrar el modal, ▶ reproduce y Resumen recupera l
   assert.ok(click(root, findButton(root, "Resumen")));
   assert.notEqual(chipsRow.style.display, "none");
   assert.match(textOf(root), /minutos escuchados/);
+});
+
+test("Cómo escuchas con ≥ 20 escuchas: pinta el análisis y la tarjeta del aleatorio no apila «x % / y %» (C)", () => {
+  const clock = { t: Date.UTC(2026, 10, 14, 12) };
+  const rec = (i) => {
+    const t = clock.t - (i + 1) * 600 * S; // cada 10 min hacia atrás, todo hoy
+    const played = i % 2 ? 5 : 120; // la mitad saltadas
+    return { id: `h${i}`, uri: `spotify:track:H${i}`, kind: "track", title: `Canción ${i}`, artists: [{ uri: null, name: "Artista" }],
+      albumUri: null, contextUri: "spotify:playlist:p1", shuffle: i < 10 ? "on" : "off", durationMs: 200 * S,
+      startedAt: t, playedMs: played * S, pauses: 0, endedAt: t + played * S };
+  };
+  const disk = { "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: 0, open: null, records: Array.from({ length: 20 }, (_, i) => rec(i)) }) };
+  const s = boot(disk, clock);
+  s.L.topbarClick();
+  const root = s.L.modal.content;
+  assert.ok(click(root, findButton(root, "Cómo escuchas")));
+  const text = textOf(root);
+  assert.match(text, /Calculado con 20 escuchas/);
+  assert.match(text, /saltas sin aleatorio · con aleatorio: 50 %/); // la segunda cifra va en la etiqueta
+  assert.doesNotMatch(text, /% \/ /); // nunca «x % / y %» en el valor grande (se partía en dos líneas)
+  assert.ok(click(root, findButton(root, "7 días")), "cambiar de rango en esta pestaña no cierra el modal");
 });
