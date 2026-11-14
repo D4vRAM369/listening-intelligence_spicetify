@@ -428,7 +428,37 @@
     return { alwaysSkipped: alwaysSkipped.slice(0, LIST_MAX), missed: missed.slice(0, LIST_MAX), playlists: playlists.slice(0, LIST_MAX) };
   }
 
-  const core = { fmtSec, habits, fmtMin, heatmap, sessions, streak, cleanup, serialize, mergeStores, ownKeys, kindOf, shuffleMode, openRecord, flush, closeRecord, applyState, recoverOpen, classify, isValidRecord, parseStore, emptyStore, rangeStart, aggregate, SCHEMA_VERSION, STORE_KEY };
+  // ─── Tendencias ───
+
+  // Periodo anterior = el mismo tramo RANGE_DAYS días atrás, cortado a la MISMA hora del reloj («ayer a esta hora»).
+  // setDate conserva la hora local aunque haya un cambio de hora entre medias (restar N × 24 h no).
+  // null si ese periodo empieza antes de observingSince: compararías con días en que no se grababa (▲ 2000 % falso).
+  function previousWindow(store, range, now) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - RANGE_DAYS[range]);
+    const prevNow = d.getTime();
+    if (store.observingSince > rangeStart(range, prevNow)) return null;
+    // Solo lo que ya había pasado a esa hora: las métricas (y «repites») ven el historial como era entonces.
+    return { records: store.records.filter((r) => r.startedAt < prevNow), now: prevNow };
+  }
+
+  // Cifra actual frente a la anterior → «▲ 18 %» (cantidades), «▼ 5 pts» (tasas 0-1), «▲ 1,2 s» (ms).
+  // null si no hay con qué comparar: un valor nulo o, en cantidades, un 0 anterior (no se divide entre 0).
+  function trend(cur, prev, kind) {
+    if (cur == null || prev == null) return null;
+    let n, unit;
+    if (kind === "count") {
+      if (!prev) return null;
+      [n, unit] = [Math.round(((cur - prev) / prev) * 100), "%"];
+    } else if (kind === "rate") [n, unit] = [Math.round((cur - prev) * 100), "pts"];
+    else [n, unit] = [Math.trunc((cur - prev) / 100), "s"]; // décimas de segundo, truncadas como fmtSec
+    if (n === 0) return "= igual";
+    if (unit === "pts" && Math.abs(n) === 1) unit = "pt"; // «1 pt», no «1 pts»
+    const size = kind === "sec" ? fmtSec(Math.abs(n) * 100) : `${Math.abs(n)} ${unit}`;
+    return `${n > 0 ? "▲" : "▼"} ${size}`;
+  }
+
+  const core = { previousWindow, trend, fmtSec, habits, fmtMin, heatmap, sessions, streak, cleanup, serialize, mergeStores, ownKeys, kindOf, shuffleMode, openRecord, flush, closeRecord, applyState, recoverOpen, classify, isValidRecord, parseStore, emptyStore, rangeStart, aggregate, SCHEMA_VERSION, STORE_KEY };
 
   // En Node (tests) solo exportamos la lógica y salimos: no hay Spotify que esperar.
   if (typeof module !== "undefined" && module.exports) module.exports = core;
@@ -597,10 +627,22 @@
   }
 
   // Bloque 2: tarjeta con una cifra grande y su etiqueta.
-  function card(label, value) {
+  // `delta` (opcional) = tendencia «▲ 18 %» en gris: describe, no juzga (sin verde ni rojo).
+  function card(label, value, delta) {
     const c = el("div", null, "flex:1 1 120px;background:var(--spice-card);border-radius:8px;padding:12px 16px");
     c.append(el("div", value, "font-size:26px;font-weight:700"), el("div", label, SUB));
+    if (delta) c.append(el("div", delta, `${SUB};margin-top:4px`));
     return c;
+  }
+
+  // Tendencias: periodo anterior + la leyenda que dice con qué se compara (una sola, no en cada tarjeta).
+  const VS = { today: "ayer a esta hora", "7d": "los 7 días anteriores (hasta esta hora)", "30d": "los 30 días anteriores (hasta esta hora)" };
+  function trendSetup(store, range, now) {
+    const w = previousWindow(store, range, now);
+    const legend = w
+      ? `Flechas: frente a ${VS[range]}.`
+      : `Sin tendencias: aún no hay un periodo anterior completo (observando desde ${new Date(store.observingSince).toLocaleDateString("es-ES")}).`;
+    return { w, legend: el("div", legend, SUB) };
   }
 
   // Bloque 3: lista del top con barra proporcional al primero (el primero = 100 %).
@@ -722,15 +764,27 @@
   // Dibuja (o redibuja) los bloques 2-5 para un rango. El selector (bloque 1) NO se toca aquí:
   // si se borrara el chip pulsado, el PopupModal cerraría la ventana (Error #6).
   function renderBody(body, store, range) {
-    const s = core.aggregate(store.records, range, Date.now());
+    const now = Date.now();
+    const s = core.aggregate(store.records, range, now);
     const total = s.valid + s.skipped;
+    const skipRate = (a) => (a.valid + a.skipped ? a.skipped / (a.valid + a.skipped) : null);
+    // Tendencias: las MISMAS funciones, con el reloj atrasado al periodo anterior.
+    const { w, legend: trendLegend } = trendSetup(store, range, now);
+    const p = w && core.aggregate(w.records, range, w.now);
+    const pses = w && sessions(w.records, range, w.now);
+    let anyArrow = false; // si al final no se dibujó ninguna, la leyenda «Flechas: …» mentiría
+    const tr = (cur, prev, kind) => {
+      const t = w ? trend(cur, prev, kind) : null;
+      if (t) anyArrow = true;
+      return t;
+    };
 
     // 2. Tres tarjetas
     const cards = el("div", null, "display:flex;gap:12px;flex-wrap:wrap");
     cards.append(
-      card("minutos escuchados", String(Math.round(s.listenedMs / 60000))),
-      card("escuchas válidas", String(s.valid)),
-      card("saltadas", total ? `${s.skipped} (${Math.round((s.skipped / total) * 100)} %)` : "0")
+      card("minutos escuchados", String(Math.round(s.listenedMs / 60000)), tr(s.listenedMs, p?.listenedMs, "count")),
+      card("escuchas válidas", String(s.valid), tr(s.valid, p?.valid, "count")),
+      card("saltadas", total ? `${s.skipped} (${Math.round((s.skipped / total) * 100)} %)` : "0", tr(skipRate(s), p && skipRate(p), "rate"))
     );
 
     // 3. Top 5 artistas y top 5 pistas, en dos columnas (una sola si la ventana es estrecha)
@@ -741,21 +795,22 @@
     );
 
     // 4. Tu semana sonora (B): mapa + sesiones + racha
-    const now = Date.now();
     const rows = range === "today" ? [(new Date(now).getDay() + 6) % 7] : [0, 1, 2, 3, 4, 5, 6];
     const ses = sessions(store.records, range, now);
     const st = streak(store.records, now); // todo el historial
     const week = el("div", null, "display:flex;flex-direction:column;gap:12px");
     const wcards = el("div", null, "display:flex;gap:12px;flex-wrap:wrap");
     wcards.append(
-      card(ses.count === 1 ? "sesión" : "sesiones", String(ses.count)),
-      card(`de media · máx. ${fmtMin(ses.maxMs)}`, fmtMin(ses.avgMs)),
+      card(ses.count === 1 ? "sesión" : "sesiones", String(ses.count), tr(ses.count, pses?.count, "count")),
+      // Sin sesiones, avgMs = 0 significa «no hay media», no «media de 0»: sin flecha (revisión final, I1).
+      card(`de media · máx. ${fmtMin(ses.maxMs)}`, fmtMin(ses.avgMs), tr(ses.count ? ses.avgMs : null, pses?.count ? pses.avgMs : null, "count")),
       card(`días seguidos · récord ${st.best}`, `🔥 ${st.current}`)
     );
     const legend = el("div", "Cada casilla es una hora del día (columnas 0 h – 23 h) de cada día de la semana (filas L – D). Más intensa = más minutos de música.", SUB);
     week.append(legend, heatGrid(heatmap(store.records, range, now), rows), wcards);
 
-    body.replaceChildren(cards, tops, section("Tu semana sonora", week));
+    if (w && !anyArrow) trendLegend.textContent = "Sin tendencias: en el periodo anterior no sonó música.";
+    body.replaceChildren(trendLegend, cards, tops, section("Tu semana sonora", week));
   }
 
   // ─── Pestaña «Limpieza» (A1) ───
@@ -808,7 +863,8 @@
   const SOURCE_SHADES = { playlist: 1, album: 0.75, artist: 0.5, track: 0.3, other: 0.15 }; // un solo color del tema, distintas intensidades
 
   function renderHabits(body, store, range) {
-    const h = habits(store.records, range, Date.now());
+    const now = Date.now();
+    const h = habits(store.records, range, now);
     if (!h.enough) {
       body.replaceChildren(el("div", `Necesita al menos ${HABITS_MIN} escuchas en este rango (llevas ${h.n}). Prueba con «7 días» o «30 días».`, SUB));
       return;
@@ -823,15 +879,20 @@
     if (!h.badges.length) badges.append(el("span", "Sin insignias en este rango: ningún hábito destaca todavía.", SUB));
 
     const dash = (x, f) => (x == null ? "—" : f(x)); // null → «—» (no hay con qué calcularlo)
+    // Tendencias: solo si el periodo anterior también llega a HABITS_MIN (si no, sus cifras no significan nada).
+    let { w, legend: trendLegend } = trendSetup(store, range, now);
+    const ph = w && habits(w.records, range, w.now);
+    if (w && !ph.enough) trendLegend = el("div", `Sin tendencias: el periodo anterior tiene menos de ${HABITS_MIN} escuchas (${ph.n}).`, SUB);
+    const tr = (cur, prev, kind) => (ph?.enough ? trend(cur, prev, kind) : null);
     const cards = el("div", null, "display:flex;gap:12px;flex-wrap:wrap");
     cards.append(
-      card(`de cada canción · ${h.completed} enteras, ${h.partial} a medias, ${h.skipped} saltadas`, dash(h.attention, pct)),
-      card("antes de saltar (mediana)", dash(h.patienceMs, fmtSec)),
+      card(`de cada canción · ${h.completed} enteras, ${h.partial} a medias, ${h.skipped} saltadas`, dash(h.attention, pct), tr(h.attention, ph?.attention, "rate")),
+      card("antes de saltar (mediana)", dash(h.patienceMs, fmtSec), tr(h.patienceMs, ph?.patienceMs, "sec")),
       // Una cifra grande y la otra en la etiqueta: «x % / y %» no cabía y se partía en dos líneas.
       h.shuffleSkip.off != null
         ? card(`saltas sin aleatorio · con aleatorio: ${dash(h.shuffleSkip.on, pct)}`, pct(h.shuffleSkip.off))
         : card("saltas con aleatorio · sin aleatorio: —", dash(h.shuffleSkip.on, pct)),
-      card(`repites · ${dash(h.repeatShare, (r) => pct(1 - r))} descubres`, dash(h.repeatShare, pct))
+      card(`repites · ${dash(h.repeatShare, (r) => pct(1 - r))} descubres`, dash(h.repeatShare, pct), tr(h.repeatShare, ph?.repeatShare, "rate"))
     );
 
     // Desde dónde: barra apilada + leyenda
@@ -853,6 +914,7 @@
 
     body.replaceChildren(
       el("div", `Calculado con ${h.n} escuchas de este rango. Pasa el ratón por una insignia para ver su regla.`, SUB),
+      trendLegend,
       badges,
       cards,
       section("Desde dónde pones la música", from)

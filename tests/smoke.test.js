@@ -219,3 +219,64 @@ test("Cómo escuchas con ≥ 20 escuchas: pinta el análisis y la tarjeta del al
   assert.doesNotMatch(text, /% \/ /); // nunca «x % / y %» en el valor grande (se partía en dos líneas)
   assert.ok(click(root, findButton(root, "7 días")), "cambiar de rango en esta pestaña no cierra el modal");
 });
+
+test("Tendencias: flechas frente a ayer a esta hora en Resumen y Cómo escuchas", () => {
+  const clock = { t: Date.UTC(2026, 10, 14, 12) };
+  // 20 ayer (todas válidas) y 20 hoy (la mitad saltadas), cada 10 min hacia atrás desde la misma hora
+  const rec = (i, dayOffset, played) => {
+    const t = clock.t - dayOffset * 86_400_000 - (i + 1) * 600 * S;
+    return { id: `t${dayOffset}-${i}`, uri: `spotify:track:T${i}`, kind: "track", title: `Canción ${i}`, artists: [{ uri: null, name: "Artista" }],
+      albumUri: null, contextUri: "spotify:playlist:p1", shuffle: "off", durationMs: 200 * S,
+      startedAt: t, playedMs: played * S, pauses: 0, endedAt: t + played * S };
+  };
+  const records = [...Array.from({ length: 20 }, (_, i) => rec(i, 1, 120)), ...Array.from({ length: 20 }, (_, i) => rec(i, 0, i % 2 ? 5 : 120))];
+  const disk = { "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: 0, open: null, records }) };
+  const s = boot(disk, clock);
+  s.L.topbarClick();
+  const root = s.L.modal.content;
+  let text = textOf(root);
+  assert.match(text, /frente a ayer a esta hora/);
+  assert.match(text, /▼ 50 %/); // válidas: 20 → 10
+  assert.ok(click(root, findButton(root, "Cómo escuchas")));
+  text = textOf(root);
+  assert.match(text, /frente a ayer a esta hora/);
+  assert.match(text, /▼ \d+ pts/); // atención baja (la mitad saltadas)
+});
+
+test("Tendencias: sin periodo anterior completo → leyenda «Sin tendencias» y ninguna flecha", () => {
+  const clock = { t: Date.UTC(2026, 10, 14, 12) };
+  const r = { id: "x", uri: "spotify:track:X", kind: "track", title: "X", artists: [{ uri: null, name: "A" }], albumUri: null, contextUri: null,
+    shuffle: "off", durationMs: 200 * S, startedAt: clock.t - 600 * S, playedMs: 120 * S, pauses: 0, endedAt: clock.t - 480 * S };
+  const disk = { "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: clock.t - 3600 * S, open: null, records: [r] }) };
+  const s = boot(disk, clock);
+  s.L.topbarClick();
+  const text = textOf(s.L.modal.content);
+  assert.match(text, /Sin tendencias: aún no hay un periodo anterior completo/);
+  assert.doesNotMatch(text, /[▲▼]/);
+});
+
+test("Tendencias: sin sesiones hoy, la media por sesión no lleva flecha (revisión final, I1)", () => {
+  const clock = { t: new Date(2026, 10, 14, 8).getTime() }; // hoy 08:00, aún sin música
+  const t = clock.t - 86_400_000 - 3600 * S; // ayer 07:00
+  const r = { id: "y", uri: "spotify:track:Y", kind: "track", title: "Y", artists: [{ uri: null, name: "A" }], albumUri: null, contextUri: null,
+    shuffle: "off", durationMs: 200 * S, startedAt: t, playedMs: 120 * S, pauses: 0, endedAt: t + 120 * S };
+  const disk = { "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: 0, open: null, records: [r] }) };
+  const s = boot(disk, clock);
+  s.L.topbarClick();
+  const findCard = (n) => (n.children.some((c) => c.textContent.startsWith("de media")) ? n : n.children.map(findCard).find(Boolean));
+  const avg = findCard(s.L.modal.content);
+  assert.match(textOf(avg), /—/); // «—»: no hay media que calcular…
+  assert.doesNotMatch(textOf(avg), /[▲▼]/); // …así que tampoco hay tendencia (antes: «— ▼ 100 %»)
+});
+
+test("Tendencias: periodo anterior sin música → la leyenda lo dice, en vez de «Flechas: …» sin flechas", () => {
+  const clock = { t: Date.UTC(2026, 10, 14, 12) };
+  const r = { id: "x", uri: "spotify:track:X", kind: "track", title: "X", artists: [{ uri: null, name: "A" }], albumUri: null, contextUri: null,
+    shuffle: "off", durationMs: 200 * S, startedAt: clock.t - 600 * S, playedMs: 120 * S, pauses: 0, endedAt: clock.t - 480 * S };
+  const disk = { "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: 0, open: null, records: [r] }) };
+  const s = boot(disk, clock);
+  s.L.topbarClick();
+  const text = textOf(s.L.modal.content);
+  assert.match(text, /Sin tendencias: en el periodo anterior no sonó música/);
+  assert.doesNotMatch(text, /Flechas: frente a/);
+});
