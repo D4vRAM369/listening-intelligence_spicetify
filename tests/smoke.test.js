@@ -281,3 +281,37 @@ test("Tendencias: periodo anterior sin música → la leyenda lo dice, en vez de
   assert.match(text, /Sin tendencias: en el periodo anterior no sonó música/);
   assert.doesNotMatch(text, /Flechas: frente a/);
 });
+
+test("Recuerdos: pestaña con la canción del periodo; pulsar un día no cierra el modal y lo enseña hora a hora (D-024)", async () => {
+  const clock = { t: new Date(2026, 10, 14, 12).getTime() };
+  const rec = (i, uri, title) => {
+    const t = new Date(2026, 10, 10 + i, 21).getTime(); // 21 h: «noche»
+    return { id: `m${i}${uri}`, uri, kind: "track", title, artists: [{ uri: "spotify:artist:x", name: "Artista X" }],
+      albumUri: null, contextUri: null, shuffle: "off", durationMs: 200 * S, startedAt: t, playedMs: 120 * S, pauses: 0, endedAt: t + 120 * S };
+  };
+  const records = [rec(0, "spotify:track:M", "Canción M"), rec(1, "spotify:track:M", "Canción M"), rec(2, "spotify:track:N", "Canción N")];
+  const disk = { "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: new Date(2026, 10, 9).getTime(), open: null, records }) };
+  const s = await boot(disk, clock);
+
+  s.L.topbarClick();
+  const root = s.L.modal.content;
+  const chipsRow = parentOf(root, findButton(root, "Hoy"));
+  assert.ok(click(root, findButton(root, "Recuerdos")), "cambiar de pestaña no cierra el modal");
+  assert.equal(chipsRow.style.display, "none", "Recuerdos tiene su propio rango");
+  let text = textOf(root);
+  assert.match(text, /La canción de ese periodo/);
+  assert.match(text, /Canción M/);
+  assert.match(text, /sonó sobre todo de noche/);
+  assert.match(text, /Nuevas desde que se observa · 2/);
+
+  const findDay = (n) => (n.title?.startsWith("11/11/2026") ? n : n.children.map(findDay).find(Boolean));
+  const bar = findDay(root);
+  assert.ok(bar, "hay una barra para el 11-nov");
+  assert.ok(click(root, bar), "pulsar una barra no cierra el modal (Error #6)");
+  await new Promise((r) => setTimeout(r, 0)); // el redibujo va aplazado
+  text = textOf(root);
+  assert.match(text, /11\/11\/2026, hora a hora/);
+
+  assert.ok(click(root, findButton(root, "Todo")), "un atajo no cierra el modal");
+  assert.match(textOf(root), /Cada barra es un día/);
+});

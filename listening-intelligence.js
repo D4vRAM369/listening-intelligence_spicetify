@@ -186,10 +186,9 @@
   }
 
   // Más escuchas primero; empate → más tiempo escuchado; empate → nombre (orden estable y determinista).
+  const byPlays = (a, b) => b.count - a.count || b.ms - a.ms || a.name.localeCompare(b.name);
   function top(map) {
-    return [...map.values()]
-      .sort((a, b) => b.count - a.count || b.ms - a.ms || a.name.localeCompare(b.name))
-      .slice(0, TOP_N);
+    return [...map.values()].sort(byPlays).slice(0, TOP_N);
   }
 
   // Histórico + rango → cifras del panel. Pura: `now` es parámetro. Datos crudos → derivados (04 § 2).
@@ -502,7 +501,94 @@
     return `${n > 0 ? "▲" : "▼"} ${size}`;
   }
 
-  const core = { combineSources, pendingPayload, previousWindow, trend, fmtSec, habits, fmtMin, heatmap, sessions, streak, cleanup, serialize, mergeStores, ownKeys, kindOf, shuffleMode, openRecord, flush, closeRecord, applyState, recoverOpen, classify, isValidRecord, parseStore, emptyStore, rangeStart, aggregate, aggregateBetween, SCHEMA_VERSION, STORE_KEY };
+  // ─── Recuerdos (D-024) ───
+  const QUEUE_MAX = 50; // «Poner todo en la cola»: como mucho 50 pistas
+  const NEW_OBS_DAYS = 30; // el primer mes observado, «descubrir» no significa nada: todo es nuevo
+
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const ymd = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+  const parseYmd = (str, plusDays = 0) => { const [y, m, d] = str.split("-").map(Number); return new Date(y, m - 1, d + plusDays).getTime(); };
+
+  // Mueve una fecha k meses SIN desbordar: 31-mar − 1 mes = 28-feb (setMonth daría 3-mar).
+  function shiftMonths(ms, k) {
+    const d = new Date(ms);
+    const day = d.getDate();
+    d.setDate(1);
+    d.setMonth(d.getMonth() + k);
+    const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(); // día 0 del mes siguiente = último de este
+    d.setDate(Math.min(day, last));
+    return d.getTime();
+  }
+
+  // "YYYY-MM-DD" × 2 → [00:00 del primero, 00:00 del día siguiente al último): los dos días entran enteros.
+  function dayRange(fromStr, toStr) {
+    const [a, b] = fromStr <= toStr ? [fromStr, toStr] : [toStr, fromStr]; // ISO: el orden de texto es el de fechas
+    return { from: parseYmd(a), to: parseYmd(b, 1) };
+  }
+
+  // Atajos del selector → { from, to } como "YYYY-MM-DD".
+  function shortcut(name, now, observingSince) {
+    const d = new Date(now);
+    const y = d.getFullYear();
+    if (name === "lastSummer") {
+      const sy = now >= new Date(y, 8, 23).getTime() ? y : y - 1; // el último verano YA TERMINADO (acaba el 22-sep)
+      return { from: `${sy}-06-21`, to: `${sy}-09-22` };
+    }
+    if (name === "yearAgoMonth") {
+      const last = new Date(y - 1, d.getMonth() + 1, 0).getDate();
+      return { from: `${y - 1}-${pad2(d.getMonth() + 1)}-01`, to: `${y - 1}-${pad2(d.getMonth() + 1)}-${pad2(last)}` };
+    }
+    if (name === "sixMonths") return { from: ymd(shiftMonths(now, -6)), to: ymd(now) };
+    return { from: ymd(observingSince), to: ymd(now) }; // "all"
+  }
+
+  const slot = (h) => (h < 6 ? "madrugada" : h < 12 ? "mañana" : h < 20 ? "tarde" : "noche");
+
+  // Lo que sonaba entre from y to → los bloques de la pestaña. Pura (no lee el reloj).
+  // No inventa pasado: lo anterior al día en que empezó la observación no existe (clippedFrom).
+  function memories(records, from, to, observingSince) {
+    const clippedFrom = Math.max(from, dayStart(observingSince));
+    const agg = aggregateBetween(records, clippedFrom, to);
+    const inRange = (t) => t >= clippedFrom && t < to;
+    const firstValid = new Map(); // uri → primera escucha VÁLIDA de todo el historial
+    const plays = new Map(); // uri → {uri, name, artists, count, ms} solo en el rango
+    const slots = new Map(); // uri → recuento por franja
+    const dayMs = new Map(); // "YYYY-MM-DD" → ms sonados (también lo saltado, como «minutos escuchados»)
+    for (const r of records) {
+      if (r.kind !== "track") continue;
+      const valid = classify(r.playedMs, r.durationMs) === "valid";
+      if (valid && !(firstValid.get(r.uri) <= r.startedAt)) firstValid.set(r.uri, r.startedAt);
+      if (!inRange(r.startedAt)) continue;
+      const key = ymd(r.startedAt);
+      dayMs.set(key, (dayMs.get(key) ?? 0) + r.playedMs);
+      if (!valid) continue;
+      bump(plays, r.uri, { uri: r.uri, name: r.title, artists: r.artists.map((a) => a.name).join(", ") }, r.playedMs);
+      const sl = slots.get(r.uri) ?? {};
+      const k = slot(new Date(r.startedAt).getHours());
+      sl[k] = (sl[k] ?? 0) + 1;
+      slots.set(r.uri, sl);
+    }
+    const ranked = [...plays.values()].sort(byPlays);
+    const t = agg.topTracks[0];
+    const song = t ? { ...t, slot: Object.entries(slots.get(t.uri)).sort((a, b) => b[1] - a[1])[0][0] } : null;
+    const days = [];
+    for (const d = new Date(clippedFrom); d.getTime() < to; d.setDate(d.getDate() + 1)) {
+      days.push({ start: d.getTime(), ms: dayMs.get(ymd(d.getTime())) ?? 0 }); // setDate: un día natural aunque dure 23 o 25 h
+    }
+    const lim = new Date(observingSince);
+    lim.setDate(lim.getDate() + NEW_OBS_DAYS);
+    return {
+      clippedFrom,
+      song,
+      discoveries: ranked.filter((p) => inRange(firstValid.get(p.uri))),
+      discoveriesTitle: from < lim.getTime() ? "Nuevas desde que se observa" : "Descubriste en ese periodo",
+      agg,
+      days,
+      queue: ranked.slice(0, QUEUE_MAX).map((p) => p.uri),
+    };
+  }
+
+  const core = { memories, dayRange, shortcut, slot, shiftMonths, combineSources, pendingPayload, previousWindow, trend, fmtSec, habits, fmtMin, heatmap, sessions, streak, cleanup, serialize, mergeStores, ownKeys, kindOf, shuffleMode, openRecord, flush, closeRecord, applyState, recoverOpen, classify, isValidRecord, parseStore, emptyStore, rangeStart, aggregate, aggregateBetween, SCHEMA_VERSION, STORE_KEY };
 
   // En Node (tests) solo exportamos la lógica y salimos: no hay Spotify que esperar.
   if (typeof module !== "undefined" && module.exports) module.exports = core;
@@ -821,14 +907,15 @@
   }
 
   // Bloque 3: lista del top con barra proporcional al primero (el primero = 100 %).
-  function topList(title, items, label) {
+  function topList(title, items, label, playable = false) {
     const box = el("div", null, "flex:1 1 240px;min-width:0;display:flex;flex-direction:column;gap:6px");
     box.append(el("div", title, H));
     if (!items.length) box.append(el("div", "Sin escuchas válidas en este rango", SUB));
     const max = items[0]?.count ?? 1;
     for (const it of items) {
       const line = el("div", null, "display:flex;justify-content:space-between;gap:8px;font-size:13px");
-      line.append(el("span", label(it), CUT), el("span", String(it.count), "flex:none;color:var(--spice-subtext)"));
+      if (playable) line.append(playButton(it.uri, "padding:0 8px"));
+      line.append(el("span", label(it), `${CUT};flex:1;min-width:0`), el("span", String(it.count), "flex:none;color:var(--spice-subtext)"));
       box.append(line, el("div", null, `height:4px;width:${(it.count / max) * 100}%;background:var(--spice-button);border-radius:2px`));
     }
     return box;
@@ -989,23 +1076,29 @@
   }
 
   // ─── Pestaña «Limpieza» (A1) ───
-  const VIEWS = [["summary", "Resumen"], ["habits", "Cómo escuchas"], ["cleanup", "Limpieza"]];
+  const VIEWS = [["summary", "Resumen"], ["habits", "Cómo escuchas"], ["cleanup", "Limpieza"], ["memories", "Recuerdos"]];
+  const SHORTCUTS = [["all", "Todo"], ["yearAgoMonth", "Este mes hace un año"], ["lastSummer", "Verano pasado"], ["sixMonths", "Últimos 6 meses"]];
   // Pestañas = texto subrayado, para no confundirlas con los chips de rango (que son píldoras).
   const TAB_ON = "background:none;border-radius:0;padding:6px 2px;color:var(--spice-text);border-bottom:2px solid var(--spice-button)";
   const TAB_OFF = "background:none;border-radius:0;padding:6px 2px;color:var(--spice-subtext);border-bottom:2px solid transparent";
 
-  // Filas de canciones con ▶. El ▶ no redibuja nada: pulsarlo nunca saca el botón del DOM (Error #6).
+  // ▶ que reproduce una URI. No redibuja nada: pulsarlo nunca saca el botón del DOM (Error #6).
+  function playButton(uri, extra = "padding:4px 10px") {
+    const play = button("▶", `${OFF};${extra};flex:none`, () => {
+      // playUri devuelve una promesa: si falla, se avisa en consola sin romper el panel.
+      Spicetify.Player.playUri(uri)?.catch?.((e) => console.warn(TAG, "no se pudo reproducir", e));
+    });
+    play.title = "Reproducir";
+    return play;
+  }
+
+  // Filas de canciones con ▶.
   function trackRows(items, stat, empty) {
     const box = el("div", null, "display:flex;flex-direction:column;gap:6px");
     if (!items.length) box.append(el("div", empty, SUB));
     for (const t of items) {
       const row = el("div", null, "display:flex;align-items:center;gap:10px;font-size:13px");
-      const play = button("▶", `${OFF};padding:4px 10px;flex:none`, () => {
-        // playUri devuelve una promesa: si falla, se avisa en consola sin romper el panel.
-        Spicetify.Player.playUri(t.uri)?.catch?.((e) => console.warn(TAG, "no se pudo reproducir", e));
-      });
-      play.title = "Reproducir";
-      row.append(play, el("span", t.artists ? `${t.name} · ${t.artists}` : t.name, `${CUT};flex:1;min-width:0`), el("span", stat(t), "flex:none;color:var(--spice-subtext)"));
+      row.append(playButton(t.uri), el("span", t.artists ? `${t.name} · ${t.artists}` : t.name, `${CUT};flex:1;min-width:0`), el("span", stat(t), "flex:none;color:var(--spice-subtext)"));
       box.append(row);
     }
     return box;
@@ -1096,6 +1189,83 @@
     );
   }
 
+  // ─── Pestaña «Recuerdos» (D-024) ───
+  const fmtDate = (ms) => new Date(ms).toLocaleDateString("es-ES");
+  // Clic que redibuja el cuerpo: se aplaza a después de que el clic termine de subir. Si se quitara el
+  // elemento pulsado DURANTE el clic, el overlay del PopupModal creería que se pulsó fuera y cerraría (Error #6).
+  const later = (fn) => setTimeout(fn, 0);
+
+  async function queueAll(uris) {
+    try {
+      await Spicetify.addToQueue(uris.map((uri) => ({ uri })));
+      Spicetify.showNotification(`Añadidas ${uris.length} canciones a la cola`);
+    } catch (e) {
+      console.warn(TAG, "no se pudo añadir a la cola", e);
+      Spicetify.showNotification("No se pudo añadir a la cola", true);
+    }
+  }
+
+  // sel = { from, to } como "YYYY-MM-DD" (los <input type="date"> de la cabecera). pickDay(ymd) = ver solo ese día.
+  function renderMemories(body, store, sel, pickDay) {
+    const { from, to } = core.dayRange(sel.from, sel.to);
+    const m = core.memories(store.records, from, to, store.observingSince);
+    const blocks = [];
+    if (m.clippedFrom > from) blocks.push(el("div", `Antes del ${fmtDate(store.observingSince)} no hay datos: la extensión aún no observaba.`, SUB));
+    const totals = el("div", `${m.days.length} día${m.days.length === 1 ? "" : "s"} · ${fmtMin(m.agg.listenedMs)} · ${m.agg.valid} escuchas · observado desde ${fmtDate(store.observingSince)}`, SUB);
+    if (!m.agg.valid) {
+      blocks.push(el("div", "En esas fechas no sonó música (o la extensión no la vio).", SUB), totals);
+      body.replaceChildren(...blocks);
+      return;
+    }
+    // La canción de ese periodo: la «foto de portada».
+    const s = m.song;
+    const hero = el("div", null, "display:flex;align-items:center;gap:14px;background:var(--spice-card);border-radius:8px;padding:16px");
+    const txt = el("div", null, "flex:1;min-width:0;display:flex;flex-direction:column;gap:2px");
+    txt.append(el("div", "La canción de ese periodo", SUB), el("div", s.name, `font-size:20px;font-weight:700;${CUT}`),
+      el("div", `${s.artists} · ${s.count} escucha${s.count === 1 ? "" : "s"} · sonó sobre todo de ${s.slot}`, `${SUB};${CUT}`));
+    hero.append(txt, playButton(s.uri, "padding:10px 16px;font-size:16px"));
+    blocks.push(hero);
+    // Descubrimientos: 3 visibles + «y N más».
+    if (m.discoveries.length) {
+      const disc = trackRows(m.discoveries.slice(0, 3), (t) => `${t.count}`, "");
+      if (m.discoveries.length > 3) disc.append(el("div", `y ${m.discoveries.length - 3} más`, SUB));
+      blocks.push(section(`${m.discoveriesTitle} · ${m.discoveries.length}`, disc));
+    }
+    const tops = el("div", null, "display:flex;gap:24px;flex-wrap:wrap");
+    tops.append(topList("Top pistas", m.agg.topTracks, (t) => `${t.name} · ${t.artists}`, true), topList("Top artistas", m.agg.topArtists, (a) => a.name));
+    blocks.push(tops);
+    // Un día: sus 24 horas. Varios: una barra por día; pulsar una = ver ese día.
+    // ponytail: con años de rango las barras se estrechan a <1 px; agrupar por semanas/meses si molesta.
+    const bars = el("div", null, "display:flex;align-items:flex-end;gap:2px;height:48px");
+    if (m.days.length === 1) {
+      const hmax = Math.max(1, ...m.agg.byHour);
+      m.agg.byHour.forEach((v, h) => {
+        const b = el("div", null, `flex:1;min-width:0;height:${Math.max(v ? 8 : 2, (v / hmax) * 100)}%;background:${v ? "var(--spice-button)" : "var(--spice-card)"};border-radius:2px 2px 0 0`);
+        b.title = `${h} h · ${v} escucha${v === 1 ? "" : "s"}`;
+        bars.append(b);
+      });
+      // Etiquetas con el MISMO reparto que las barras (flex:1 + gap 2px): cada «h» cae bajo su barra.
+      const axis = el("div", null, "display:flex;gap:2px;font-size:11px;color:var(--spice-subtext)");
+      for (let h = 0; h < 24; h++) axis.append(el("span", h % 6 === 0 ? `${h} h` : "", "flex:1;min-width:0;white-space:nowrap;overflow:visible"));
+      const hours = el("div", null, "display:flex;flex-direction:column;gap:4px");
+      hours.append(bars, axis);
+      blocks.push(section(`${fmtDate(m.days[0].start)}, hora a hora`, hours));
+    } else {
+      const dmax = Math.max(1, ...m.days.map((d) => d.ms));
+      for (const d of m.days) {
+        const b = el("div", null, `flex:1;min-width:0;cursor:pointer;height:${Math.max(d.ms ? 8 : 2, (d.ms / dmax) * 100)}%;background:${d.ms ? "var(--spice-button)" : "var(--spice-card)"};border-radius:2px 2px 0 0`);
+        b.title = `${fmtDate(d.start)} · ${fmtMin(d.ms)}`;
+        b.addEventListener("click", () => later(() => pickDay(d.start)));
+        bars.append(b);
+      }
+      blocks.push(section("Cada barra es un día · pulsa una para verlo hora a hora", bars));
+    }
+    const foot = el("div", null, "display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap");
+    foot.append(totals, button("Poner todo en la cola", OFF, () => queueAll(m.queue)));
+    blocks.push(foot);
+    body.replaceChildren(...blocks);
+  }
+
   function renderCleanup(body, store) {
     const now = Date.now();
     const c = cleanup(store.records, now);
@@ -1124,8 +1294,36 @@
       const tabs = VIEWS.map(([key, label]) => button(label, "", () => setView(key)));
       const chipsRow = el("div", null, "display:flex;gap:8px"); // bloque 1: se crea UNA vez y sigue en el DOM
       const chips = RANGES.map(([key, label]) => button(label, "", () => setRange(key)));
+      // Recuerdos: fechas + atajos, también creados UNA vez (Error #6). Solo se ven en esa pestaña.
+      const memRow = el("div", null, "display:none;flex-direction:column;gap:8px");
+      const dateIn = () => {
+        const i = el("input", null, "background:var(--spice-card);color:var(--spice-text);border:none;border-radius:4px;padding:6px 8px;font-size:13px;color-scheme:dark");
+        i.type = "date";
+        i.addEventListener("change", () => i.value && refresh()); // vacío (borrado a mano) = no hacer nada
+        return i;
+      };
+      const fromIn = dateIn();
+      const toIn = dateIn();
+      const setSel = ({ from, to }) => {
+        fromIn.value = from;
+        toIn.value = to;
+        refresh();
+      };
+      const pickDay = (start) => {
+        const d = new Date(start);
+        const v = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        setSel({ from: v, to: v });
+      };
+      const shortcuts = SHORTCUTS.map(([key, label]) => button(label, OFF, () => setSel(core.shortcut(key, Date.now(), store.observingSince))));
+      const datesLine = el("div", null, "display:flex;gap:8px;align-items:center;flex-wrap:wrap");
+      datesLine.append(fromIn, el("span", "→", SUB), toIn);
+      const shortLine = el("div", null, "display:flex;gap:8px;flex-wrap:wrap");
+      shortLine.append(...shortcuts);
+      memRow.append(datesLine, shortLine);
+      ({ from: fromIn.value, to: toIn.value } = core.shortcut("all", Date.now(), store.observingSince)); // por defecto: todo
       const refresh = () => {
-        if (view === "cleanup") renderCleanup(body, store); // Limpieza: todo el historial
+        if (view === "memories") renderMemories(body, store, { from: fromIn.value, to: toIn.value }, pickDay); // Recuerdos: su propio rango
+        else if (view === "cleanup") renderCleanup(body, store); // Limpieza: todo el historial
         else if (view === "habits") renderHabits(body, store, range); // Cómo escuchas: el rango elegido
         else renderBody(body, store, range); // Resumen: el rango elegido
         footer.update(); // solo el texto del pie
@@ -1140,7 +1338,8 @@
       function setView(v) {
         view = v;
         tabs.forEach((t, i) => (t.style.cssText = BTN + (VIEWS[i][0] === v ? TAB_ON : TAB_OFF)));
-        chipsRow.style.display = v === "cleanup" ? "none" : "flex"; // «flex», no "": "" borraría el display del cssText
+        chipsRow.style.display = v === "cleanup" || v === "memories" ? "none" : "flex"; // «flex», no "": "" borraría el display del cssText
+        memRow.style.display = v === "memories" ? "flex" : "none";
         setRange(range); // repinta chips y cuerpo
       }
       tabsRow.append(...tabs);
@@ -1148,7 +1347,7 @@
       // Pestañas + chips en una cabecera FIJA: al bajar por el panel siguen a mano (pulido B).
       // Fondo = el del modal (.GenericModal usa --spice-player) para que lo que pasa por debajo no se transparente.
       const header = el("div", null, "position:sticky;top:0;z-index:1;background:var(--spice-player);display:flex;flex-direction:column;gap:12px;padding-bottom:8px");
-      header.append(tabsRow, chipsRow);
+      header.append(tabsRow, chipsRow, memRow);
       root.append(header, body, footer.foot);
       setView(view);
       Spicetify.PopupModal.display({ title: "Listening Intelligence", content: root, isLarge: true });
