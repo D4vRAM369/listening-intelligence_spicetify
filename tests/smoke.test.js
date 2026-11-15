@@ -443,3 +443,24 @@ test("Borrar avisa del error si IndexedDB no se vació (revisión, I4)", async (
   const last = s.L.notes.at(-1);
   assert.ok(last.isError, `el último aviso es de error: «${last.msg}»`);
 });
+
+test("el panel recuerda el último rango aunque se reinicie Spotify; un valor raro vuelve a «Hoy»", async () => {
+  const clock = { t: Date.UTC(2026, 10, 14, 12) };
+  const t0 = clock.t - 3 * 86400 * S; // fuera de «Hoy», dentro de «7 días»
+  const rec = { id: "x", uri: "spotify:track:A", kind: "track", title: "Canción A", artists: [{ uri: "spotify:artist:x", name: "Artista X" }],
+    albumUri: null, contextUri: null, shuffle: "off", durationMs: 200 * S, startedAt: t0, playedMs: 120 * S, pauses: 0, endedAt: t0 + 120 * S };
+  const disk = { "listening-intelligence:v1:store": JSON.stringify({ schemaVersion: 1, observingSince: t0, open: null, records: [rec] }) };
+  let s = await boot(disk, clock);
+  s.L.topbarClick();
+  click(s.L.modal.content, findButton(s.L.modal.content, "7 días"));
+  assert.equal(disk["listening-intelligence:range"], "7d");
+
+  s = await boot(disk, clock); // «reinicio de Spotify»: mismo disco
+  s.L.topbarClick();
+  assert.match(textOf(s.L.modal.content), /Canción A · Artista X/); // abre ya en «7 días»
+
+  disk["listening-intelligence:range"] = "toString"; // valor que no es un rango (y que «in» aceptaría por herencia)
+  s = await boot(disk, clock);
+  s.L.topbarClick();
+  assert.match(textOf(s.L.modal.content), /Sin escuchas válidas en este rango/); // «Hoy»
+});

@@ -279,6 +279,7 @@
   // Copia de seguridad (D-023, Parte 2). Spotify no permite recuperar el permiso de escritura tras
   // reiniciarse (spike 2026-11-14), así que no hay copia automática: el pie recuerda la última de Exportar.
   const BACKUP_KEY = PREFIX + "lastBackup";
+  const RANGE_KEY = PREFIX + "range"; // último rango elegido (Hoy / 7 días / 30 días): sobrevive a reiniciar Spotify
   function backupLine(lastBackupAt, now) {
     if (!Number.isFinite(lastBackupAt)) return "Sin copia de seguridad todavía: usa Exportar";
     const days = Math.round((dayStart(now) - dayStart(lastBackupAt)) / 86400000); // round: un día de 23 o 25 h sigue siendo 1
@@ -1380,7 +1381,10 @@
       console.warn(TAG, "Topbar/PopupModal no disponibles: sin icono, el registro sigue funcionando");
       return;
     }
-    let range = "today"; // se recuerdan mientras Spotify siga abierto
+    // El rango se recuerda entre reinicios de Spotify; la pestaña, solo mientras siga abierto.
+    // Un valor guardado que no sea un rango conocido (versión futura, editado a mano) vuelve a «Hoy».
+    const savedRange = Spicetify.LocalStorage.get(RANGE_KEY);
+    let range = savedRange != null && Object.hasOwn(RANGE_DAYS, savedRange) ? savedRange : "today"; // hasOwn: «in» aceptaría "toString"
     let view = "summary";
     new Spicetify.Topbar.Button("Listening Intelligence", ICON_SVG, () => {
       // El panel se construye en cada clic: siempre muestra los datos del momento.
@@ -1461,6 +1465,11 @@
       const footer = buildFooter(store, ops, refresh);
       function setRange(r) {
         range = r;
+        try {
+          Spicetify.LocalStorage.set(RANGE_KEY, r);
+        } catch (e) {
+          console.warn(TAG, "no se pudo recordar el rango", e); // sin espacio: el panel funciona igual, solo no lo recuerda
+        }
         // Solo cambia el estilo de los chips (mismos elementos): el pulsado nunca sale del DOM.
         chips.forEach((c, i) => (c.style.cssText = BTN + (RANGES[i][0] === r ? ON : OFF)));
         refresh();
