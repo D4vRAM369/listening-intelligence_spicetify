@@ -4,7 +4,7 @@
 
 Extensión de [Spicetify](https://spicetify.app) que registra **qué, cuándo y cómo escuchas** en Spotify y te lo enseña en un panel. Todo se queda en tu equipo.
 
-> **Estado: v0.1 beta.** Funciona y tiene 91 tests, pero el historial se ha probado con pocos días de uso real. La interfaz está en español.
+> **Estado: v0.1 beta.** Funciona y tiene 92 tests, pero el historial se ha probado con pocos días de uso real. La interfaz está en español.
 
 *English summary: a Spicetify extension that logs your Spotify listening locally (IndexedDB, nothing leaves your machine) and shows stats, listening habits, trends, a weekly heatmap, a cleanup list of songs you always skip, and "Memories": what you were listening to between any two dates. UI in Spanish.*
 
@@ -91,7 +91,7 @@ Un registro:
 Todo el código está en un solo archivo, por capas: lógica pura arriba (exportada como `core`, sin Spotify), captura y almacenamiento en medio, interfaz abajo.
 
 ```bash
-node --test tests/          # 91 tests: lógica pura + extremo a extremo con un Spotify simulado
+node --test tests/*.test.js          # 92 tests: lógica pura + extremo a extremo con un Spotify simulado
 ```
 
 Node 20 o superior. Sin dependencias.
