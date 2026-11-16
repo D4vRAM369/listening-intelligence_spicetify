@@ -91,7 +91,7 @@ Un registro:
 Todo el código está en un solo archivo, por capas: lógica pura arriba (exportada como `core`, sin Spotify), captura y almacenamiento en medio, interfaz abajo.
 
 ```bash
-node --test tests/*.test.js          # 92 tests: lógica pura + extremo a extremo con un Spotify simulado
+npm test                              # 92 tests: lógica pura + extremo a extremo con un Spotify simulado
 ```
 
 Node 20 o superior. Sin dependencias.
