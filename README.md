@@ -1,67 +1,67 @@
-<p align="center"><img src="assets/banner.png" alt="Listening Intelligence: qué, cuándo y cómo escuchas en Spotify"></p>
+<p align="center"><img src="assets/banner.png" alt="Listening Intelligence: what, when and how you listen on Spotify"></p>
 
 # Listening Intelligence
 
-Extensión de [Spicetify](https://spicetify.app) que registra **qué, cuándo y cómo escuchas** en Spotify y te lo enseña en un panel. Todo se queda en tu equipo.
+🇬🇧 English · 🇪🇸 [Español](README-ES.md)
 
-> **Estado: v0.1 beta.** Funciona y tiene 92 tests, pero el historial se ha probado con pocos días de uso real. La interfaz está en español.
+A [Spicetify](https://spicetify.app) extension that records **what, when and how you listen** on Spotify and shows it in a panel. Everything stays on your machine.
 
-*English summary: a Spicetify extension that logs your Spotify listening locally (IndexedDB, nothing leaves your machine) and shows stats, listening habits, trends, a weekly heatmap, a cleanup list of songs you always skip, and "Memories": what you were listening to between any two dates. UI in Spanish.*
+> **Status: v0.1 beta.** It works and has 92 tests, but the history has only been tried with a few days of real use. The interface is in Spanish.
 
-## Qué hace
+## What it does
 
-Un icono en la barra superior de Spotify abre un panel con cuatro pestañas:
+An icon in Spotify's top bar opens a panel with four tabs:
 
-| Pestaña | Qué ves |
+| Tab | What you see |
 |---|---|
-| **Resumen** | Minutos escuchados, escuchas válidas y saltadas, top artistas y pistas, mapa de calor día × hora, sesiones y racha de días. Cada cifra lleva su cambio frente al periodo anterior «a esta hora» (▲ 18 %). Rangos: hoy, 7 días, 30 días. |
-| **Cómo escuchas** | Hábitos con reglas visibles: atención, paciencia antes de saltar, aleatorio, repetir o descubrir, desde dónde escuchas. |
-| **Limpieza** | Canciones que siempre saltas, las que echas de menos y las playlists donde más saltas, con ▶ para comprobarlo. Solo lectura: no toca tus playlists. |
-| **Recuerdos** | Elige dos fechas (DD/MM/AAAA) y mira qué sonaba: la canción de ese periodo, lo que descubriste, los tops, una barra por día (pulsa una para verla hora a hora) y «Poner todo en la cola». |
+| **Resumen** (Summary) | Minutes listened, valid and skipped plays, top artists and tracks, day × hour heatmap, sessions and day streak. Every figure shows its change against the previous period "at this same time" (▲ 18 %). Ranges: today, 7 days, 30 days. |
+| **Cómo escuchas** (How you listen) | Habits with visible rules: attention, patience before skipping, shuffle, repeat vs. discovery, where you listen from. |
+| **Limpieza** (Cleanup) | Songs you always skip, ones you miss, and the playlists where you skip most, with ▶ to check them. Read-only: it never touches your playlists. |
+| **Recuerdos** (Memories) | Pick two dates (DD/MM/YYYY) and see what was playing: the song of that period, what you discovered, the tops, one bar per day (click one for an hour-by-hour view) and "Add everything to queue". |
 
-En Resumen aparece además **«Tal día como hoy»** cuando hay música del mismo día hace un año (o, si no, hace un mes).
+Summary also shows **"This day last year"** when there is music from the same day a year ago (or, failing that, a month ago).
 
-**Qué cuenta como escucha válida:** al menos 30 s sonando o el 50 % de la canción, lo que llegue antes. Los minutos cuentan todo lo que sonó, también lo saltado.
+**What counts as a valid play:** at least 30 s playing or 50 % of the track, whichever comes first. Minutes count everything that played, skipped songs included.
 
-## Privacidad
+## Privacy
 
-- **Nada sale de tu equipo.** No hay servidor, ni cuentas, ni llamadas a la API web de Spotify.
-- El historial se guarda en IndexedDB, dentro del propio cliente de Spotify.
-- Solo se registra lo que la extensión ve desde que la instalas: no puede recuperar escuchas anteriores.
-- **Exportar / Importar / Borrar** están en el pie del panel. Borrar pide confirmación y solo toca los datos de esta extensión.
+- **Nothing leaves your machine.** No server, no accounts, no calls to the Spotify web API.
+- History is stored in IndexedDB, inside the Spotify client itself.
+- It only records what the extension sees from the moment you install it: it cannot recover earlier listening.
+- **Export / Import / Delete** are in the panel footer. Delete asks for confirmation and only touches this extension's data.
 
-### Haz copias de vez en cuando
+### Back up now and then
 
-Spotify guarda los datos de las extensiones en una carpeta de **caché**. Si la vacías, o reinstalas Spotify, el historial se pierde. Usa **Exportar** y guarda el archivo `.json` en otro sitio; **Importar** lo vuelve a unir sin duplicar nada. El pie del panel recuerda cuándo fue la última copia. (La extensión no puede hacer copias automáticas: Spotify no conserva el permiso de escritura entre reinicios.)
+Spotify keeps extension data in a **cache** folder. If you clear it, or reinstall Spotify, the history is lost. Use **Export** and save the `.json` file somewhere else; **Import** merges it back without duplicates. The footer reminds you when the last backup was. (The extension cannot back up automatically: Spotify does not keep write permission between restarts.)
 
-## Instalación
+## Installation
 
-**Requisitos:** Spotify de escritorio con [Spicetify](https://spicetify.app/docs/getting-started) instalado.
+**Requirements:** Spotify desktop with [Spicetify](https://spicetify.app/docs/getting-started) installed.
 
-1. Descarga `listening-intelligence.js`.
-2. Cópialo a la carpeta `Extensions` de Spicetify. Para saber dónde está:
+1. Download `listening-intelligence.js`.
+2. Copy it to Spicetify's `Extensions` folder. To find it:
    ```bash
    spicetify config-dir
    ```
-3. Actívalo y aplica:
+3. Enable it and apply:
    ```bash
    spicetify config extensions listening-intelligence.js
    spicetify apply
    ```
-4. Spotify se reinicia y muestra el aviso «Listening Intelligence registrando». El icono (un reloj con barras) aparece en la barra superior.
+4. Spotify restarts and shows the notice "Listening Intelligence registrando". The icon (a clock with bars) appears in the top bar.
 
-Para desinstalar: `spicetify config extensions listening-intelligence.js-` y `spicetify apply`.
+To uninstall: `spicetify config extensions listening-intelligence.js-` then `spicetify apply`.
 
-## Formato de los datos
+## Data format
 
-El historial está pensado para que otras extensiones (como una futura *Musical DNA*) lo lean. Las dos corren en la misma página de Spotify, así que pueden abrir la misma base de datos.
+The history is designed so other extensions (like a future *Musical DNA*) can read it. Both run in the same Spotify page, so they can open the same database.
 
-- **IndexedDB** `listening-intelligence`, versión 1.
-  - Almacén `records` (clave `id`, índice `startedAt`): una entrada por escucha.
-  - Almacén `meta` (clave `"meta"`): `{ schemaVersion: 1, observingSince }`.
-- El archivo de **Exportar** tiene la misma forma: `{ schemaVersion: 1, observingSince, open: null, records: [...] }`.
+- **IndexedDB** `listening-intelligence`, version 1.
+  - Store `records` (key `id`, index `startedAt`): one entry per play.
+  - Store `meta` (key `"meta"`): `{ schemaVersion: 1, observingSince }`.
+- The **Export** file has the same shape: `{ schemaVersion: 1, observingSince, open: null, records: [...] }`.
 
-Un registro:
+A record:
 
 ```json
 {
@@ -81,38 +81,38 @@ Un registro:
 }
 ```
 
-- Las fechas son milisegundos desde 1970 (`Date.now()`).
-- `kind`: `track`, `episode`, `local` u `other`. Las estadísticas solo usan `track`.
-- `shuffle`: `off`, `on` o `smart`.
-- Si la forma cambia, `schemaVersion` subirá.
+- Dates are milliseconds since 1970 (`Date.now()`).
+- `kind`: `track`, `episode`, `local` or `other`. Statistics only use `track`.
+- `shuffle`: `off`, `on` or `smart`.
+- If the shape changes, `schemaVersion` will be bumped.
 
-## Desarrollo
+## Development
 
-Todo el código está en un solo archivo, por capas: lógica pura arriba (exportada como `core`, sin Spotify), captura y almacenamiento en medio, interfaz abajo.
+All code lives in a single file, in layers: pure logic on top (exported as `core`, no Spotify needed), capture and storage in the middle, interface at the bottom.
 
 ```bash
-npm test                              # 92 tests: lógica pura + extremo a extremo con un Spotify simulado
+npm test      # 92 tests: pure logic + end-to-end against a simulated Spotify
 ```
 
-Node 20 o superior. Sin dependencias.
+Node 20 or newer. No dependencies.
 
-Para depurar contra Spotify real desde la terminal:
+To debug against real Spotify from the terminal:
 
 ```bash
-flatpak run com.spotify.Client --remote-debugging-port=9222 &   # o el equivalente en tu sistema
+flatpak run com.spotify.Client --remote-debugging-port=9222 &   # or the equivalent on your system
 node --experimental-websocket tools/cdp.js 'ListeningIntelligence.store.records.length'
 ```
 
-⚠️ Con el puerto de depuración abierto, cualquier programa de tu equipo puede controlar Spotify. Ciérralo al terminar.
+⚠️ With the debugging port open, any program on your machine can control Spotify. Close it when done.
 
-Los comentarios del código citan identificadores como `D-024` o `Error #6`: vienen de un diario de diseño interno que no forma parte del repositorio.
+Code comments cite identifiers like `D-024` or `Error #6`: they come from an internal design journal that is not part of the repository. Comments and the UI are in Spanish.
 
-## Limitaciones conocidas
+## Known limitations
 
-- Solo se ha probado en Linux (Spotify flatpak, cliente 1.2.95).
-- No se ha probado con Spotify Connect (reproducir en otro dispositivo), ni a fondo con pódcasts o archivos locales.
-- Con rangos de varios años, las barras por día de Recuerdos se vuelven muy finas.
+- Only tested on Linux (Spotify flatpak, client 1.2.95).
+- Not tested with Spotify Connect (playing on another device), nor thoroughly with podcasts or local files.
+- With multi-year ranges, the per-day bars in Memories become very thin.
 
-## Licencia
+## License
 
 [MIT](LICENSE).
