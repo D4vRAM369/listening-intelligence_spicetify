@@ -34,6 +34,10 @@ Summary also shows **"This day last year"** when there is music from the same da
 
 Spotify keeps extension data in a **cache** folder. If you clear it, or reinstall Spotify, the history is lost. Use **Export** and save the `.json` file somewhere else; **Import** merges it back without duplicates. The footer reminds you when the last backup was. (The extension cannot back up automatically: Spotify does not keep write permission between restarts.)
 
+## Optional companion: Musical DNA
+
+Listening Intelligence works fully on its own. If you want to go one step further, [**Musical DNA**](https://github.com/D4vRAM369/musical-dna_spicetify) is an optional extension that reads this history (read-only) to show what defines your taste and suggest songs with a small recommender that learns from what you listen to. It is not required: install it only if you are curious.
+
 ## Installation
 
 **Requirements:** Spotify desktop with [Spicetify](https://spicetify.app/docs/getting-started) installed.
@@ -54,7 +58,7 @@ To uninstall: `spicetify config extensions listening-intelligence.js-` then `spi
 
 ## Data format
 
-The history is designed so other extensions (like a future *Musical DNA*) can read it. Both run in the same Spotify page, so they can open the same database.
+The history is designed so other extensions (like [Musical DNA](https://github.com/D4vRAM369/musical-dna_spicetify)) can read it. Both run in the same Spotify page, so they can open the same database.
 
 - **IndexedDB** `listening-intelligence`, version 1.
   - Store `records` (key `id`, index `startedAt`): one entry per play.
