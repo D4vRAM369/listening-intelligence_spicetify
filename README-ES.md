@@ -12,6 +12,8 @@ Extensión de [Spicetify](https://spicetify.app) que registra **qué, cuándo y 
 
 ## Qué hace
 
+![Vista previa de Listening Intelligence](assets/preview.png)
+
 Un icono en la barra superior de Spotify abre un panel con cuatro pestañas:
 
 | Pestaña | Qué ves |
