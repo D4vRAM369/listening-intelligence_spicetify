@@ -10,6 +10,8 @@ A [Spicetify](https://spicetify.app) extension that records **what, when and how
 
 ## What it does
 
+![Listening Intelligence preview](assets/preview.png)
+
 An icon in Spotify's top bar opens a panel with four tabs:
 
 | Tab | What you see |
