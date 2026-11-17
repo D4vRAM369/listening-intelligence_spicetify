@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Listening Intelligence",
+    "description": "Spicetify extension that logs what, when and how you listen on Spotify: stats, habits, trends, cleanup and memories. 100% local.",
+    "preview": "assets/banner.png",
+    "main": "listening-intelligence.js",
+    "readme": "README.md",
+    "authors": [
+      {
+        "name": "D4vRAM369",
+        "url": "https://github.com/D4vRAM369"
+      }
+    ],
+    "tags": [
+      "stats",
+      "analytics",
+      "history",
+      "privacy",
+      "local"
+    ]
+  }
+]
